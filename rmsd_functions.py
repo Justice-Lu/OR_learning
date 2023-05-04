@@ -5,6 +5,9 @@ import copy
 import pandas as pd 
 import itertools
 
+from Bio.PDB.Polypeptide import three_to_one
+from tmtools import tm_align
+
 def get_coordinates_pdb(filename, is_gzip=False, return_atoms_as_int=False):
     """
     Get coordinates from the first chain in a pdb file
@@ -38,6 +41,7 @@ def get_coordinates_pdb(filename, is_gzip=False, return_atoms_as_int=False):
 
     atoms = list()
     resid = list()
+    amino_acid = list()
 
     if is_gzip:
         openfunc = gzip.open
@@ -93,6 +97,12 @@ def get_coordinates_pdb(filename, is_gzip=False, return_atoms_as_int=False):
                 except ValueError:
                     msg = "error while reading resid - HL"
                     exit(msg)
+                # Try to read the amino acid 
+                try:
+                    amino_acid.append(np.asarray(three_to_one(tokens[3]), dtype=str))
+                except ValueError:
+                    msg = "error while reading amino acid - HL"
+                    exit(msg)
 
 
 #    if return_atoms_as_int:
@@ -101,12 +111,13 @@ def get_coordinates_pdb(filename, is_gzip=False, return_atoms_as_int=False):
     V = np.asarray(V)
     atoms = np.asarray(atoms)
     resid = np.asarray(resid)
+    amino_acid = np.asarray(amino_acid)
 
 
     
     assert V.shape[0] == atoms.size 
 
-    return atoms, V, resid
+    return atoms, V, resid, amino_acid
 
 
 def rmsd(V, W):
@@ -325,8 +336,8 @@ def df_plot_all(data_df, size=3, opacity=0.6, no_background=True):
                                  showbackground=False)),
                             margin=dict(r=10, l=10, b=10, t=10)
     )
-    fig.show()
-    return
+    
+    return fig
 
 
 # remove "H" from models, since some models doesn't have it and it may throw off alignment 
@@ -416,8 +427,71 @@ def rmsd_table(data, sequence):
     print('Rmsd table contructed')
     return table
 
+
+
+def get_residue_data(chain):
+    """
+    Adapted from tmtool https://github.com/jvkersch/tmtools/blob/main/tmtools/io.py
+    
+    Extract residue coordinates and sequence from PDB chain.
+    Uses the coordinates of the Cα atom as the center of the residue.
+    """
+    coords = []
+    seq = []
+    for residue in chain.get_residues():
+        if "CA" in residue.child_dict:
+            coords.append(residue.child_dict["CA"].coord)
+            seq.append(three_to_one(residue.resname))
+
+    return np.vstack(coords), "".join(seq)
+
+
+def tmalign_data(data, align=None, rotate_data = None):
+    remove = []
+    if align == None :
+        align = list(data.keys())[0]
+    for models in data: 
+        if models == align: 
+            continue 
+            
+        try:
+            # Extract xyz coordinates and amino acid sequences (sequences are transformed from list to single string)
+            tm_align_output = tm_align(data[align]['coord'], 
+                                       data[models]['coord'], 
+                                       ''.join(data[align]['amino_acid'].tolist()), 
+                                       ''.join(data[models]['amino_acid'].tolist()))
+        except:
+            print('WARNING: {} is not calculated, removed from data'.format(models))
+            remove.append(models)
+            continue
+            
+        if rotate_data != None: 
+            rotate_data[models]['coord'] = np.dot(rotate_data[models]['coord'], tm_align_output.u)
+            print('{} rotated to match {}, alignment score: {}, {}'.format(models, 
+                                                                           align, 
+                                                                           tm_align_output.tm_norm_chain1,
+                                                                           tm_align_output.tm_norm_chain2))
+                  
+    if rotate_data != None: 
+        if remove != []: 
+            for i in remove: 
+                  rotate_data.pop(i)
+                  print('REMOVED '+i)
+        print('RETURN new rotated data')
+        return rotate_data
+    print('NO data rotated')
+    return 
+
+
 # Get rotation matrix, can only compare x to y. The first key in dict{} is used 
+
 def align_data(data, align=None, rotate_data = None):
+    """
+    The following align_data is deprecated. As kabasch method requires matrix of same shape. 
+    New align method is now utilzing tmtools tmalign. 
+    """
+    print("WARNING: USING DEPRECATED FUNCTION, PLEASE USE tmalign_data INSTEAD")
+    
     remove = []
     if align == None :
         align = list(data.keys())[0]
