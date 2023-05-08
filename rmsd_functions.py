@@ -294,7 +294,8 @@ def dict_plot_all( data , mode='markers+lines', size = 3):
     ))
     fig.update_traces( marker=dict(size=size, opacity = 0.4))
     # update_layout setting the axis visibility and background to False 
-    fig.update_layout(width=600, height=600,
+    fig.update_layout(
+#         width=600, height=600,
                   scene = dict(
                     xaxis = dict(
                          visible= False,
