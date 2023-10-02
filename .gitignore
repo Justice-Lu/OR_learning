@@ -1,0 +1,4 @@
+# List of directories to ignore in git trackign
+
+__pycache__
+.ipynb_checkpoints
