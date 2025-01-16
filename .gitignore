@@ -1,0 +1,8 @@
+# ignore voxel_info directory 
+/voxel_info/
+
+# List of directories to ignore in git trackign
+
+__pycache__
+.ipynb_checkpoints/
+notebooks/old/
