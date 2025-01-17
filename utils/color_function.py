@@ -1,4 +1,7 @@
 import plotly.colors
+import random
+from matplotlib import cm, colors as mcolors
+
 from PIL import ImageColor
 
 
@@ -75,6 +78,68 @@ def get_continuous_color(colorscale, intermed):
         intermed=((intermed - low_cutoff) / (high_cutoff - low_cutoff)),
         colortype="rgb",
     )
+
+def distinct_colors(label_list, category='tab10', custom_color=None, random_state=0):
+    """
+    Generate distinct colors for a list of labels.
+
+    Parameters:
+    label_list (list): A list of labels for which you want to generate distinct colors.
+    category (str): Category of distinct colors. Options are 'warm', 'floral', 'rainbow', 'pastel',
+                    matplotlib color palettes (e.g., 'tab10', 'Set2'), or None for random. Default is None.
+    custom_color (list): A custom list of colors to use.
+    random_state (int): Seed for random color generation. Default is 0.
+
+    Returns:
+    dict: A dictionary where labels are keys and distinct colors (in hexadecimal format) are values.
+
+    Example:
+    >>> labels = ['A', 'B', 'C']
+    >>> color_mapping = distinct_colors(labels, category='tab10')
+    >>> print(color_mapping)
+    {'A': '#1f77b4', 'B': '#ff7f0e', 'C': '#2ca02c'}
+    """
+    random.seed(random_state)
+    
+    warm_colors = ['#fabebe', '#ffd8b1', '#fffac8', '#ffe119', '#ff7f00', '#e6194B']
+    floral_colors = ['#bfef45', '#fabed4', '#aaffc3', '#ffd8b1', '#dcbeff', '#a9a9a9']
+    rainbow_colors = ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4']
+    pastel_colors = ['#A6CEE3', '#1F78B4', '#B2DF8A', '#33A02C', '#FB9A99', '#E31A1C', 
+                     '#FDBF6F', '#FF7F00', '#CAB2D6', '#6A3D9A', '#FFFF99', '#B15928', 
+                     '#8DD3C7', '#BEBADA', '#FFED6F']
+    
+    color_dict = {}
+
+    if custom_color is not None: 
+        assert len(custom_color) >= len(label_list), "Provided label_list needs to be shorter than provided custom_color"
+        for i, _label in enumerate(label_list): 
+            color_dict[_label] = custom_color[i]
+        return color_dict
+
+    color_palette = None
+
+    # Handle custom categories
+    if category in ['warm', 'floral', 'rainbow', 'pastel']: 
+        if category == 'warm':
+            color_palette = random.sample(warm_colors, len(warm_colors))
+        elif category == 'floral':
+            color_palette = random.sample(floral_colors, len(floral_colors))
+        elif category == 'rainbow':
+            color_palette = random.sample(rainbow_colors, len(rainbow_colors))
+        elif category == 'pastel': 
+            color_palette = random.sample(pastel_colors, len(pastel_colors))
+        # else:
+        #     color_palette = random.sample(warm_colors + floral_colors + rainbow_colors + pastel_colors, len(label_list))
+    # Handle matplotlib color palettes
+    elif category in mcolors.TABLEAU_COLORS or category in cm.cmaps_listed or hasattr(cm, category):
+        cmap = cm.get_cmap(category) if hasattr(cm, category) else cm.get_cmap('tab10')
+        num_colors = len(label_list)
+        color_palette = [mcolors.to_hex(cmap(i / num_colors)) for i in range(num_colors)]
+    
+    for i, label in enumerate(label_list):
+        color_dict[label] = color_palette[i % len(color_palette)]
+    
+    return color_dict
 
 def scale(values, reverse=False, factor = 1, scale_between = [1,0]):
     """
