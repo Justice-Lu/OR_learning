@@ -220,4 +220,45 @@ ATOM_ENCODING = {'C': [1, 0, 0, 0],
 
 
 
+def voxelize_coordinates(cavity_coords, resolution=1):
+    """
+    Voxelizes the 3D coordinates by placing 1s in voxels that are occupied by coordinates.
+    
+    :param cavity_coords: List of lists containing 3D coordinates for each Olfr
+    :param resolution: Size of each voxel (default is 1)
+    :return: List of 1D arrays representing the voxelized space for each Olfr
+    """
+    # Step 1: Find the global min and max coordinates across all cavities
+    all_coords = np.concatenate(cavity_coords, axis=0)
+    min_coords = np.min(all_coords, axis=0)
+    max_coords = np.max(all_coords, axis=0)
+    
+    # Step 2: Define voxel grid shape
+    grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int)
+    
+    # Step 3: Create a 3D grid for each cavity
+    voxelized_data = []
+    
+    for cavity in cavity_coords:
+        # Step 4: Create an empty voxel grid
+        voxel_grid = np.zeros(grid_shape, dtype=int)
+        
+        # Step 5: Convert each cavity point to voxel grid indices
+        for point in cavity:
+            # Translate point into grid coordinates
+            grid_x = int((point[0] - min_coords[0]) // resolution)
+            grid_y = int((point[1] - min_coords[1]) // resolution)
+            grid_z = int((point[2] - min_coords[2]) // resolution)
+            
+            # Mark the voxel as occupied
+            voxel_grid[grid_x, grid_y, grid_z] = 1
+        
+        voxelized_data.append(voxel_grid)
+    
+    return voxelized_data, grid_shape
+
+
+
+
+
 
