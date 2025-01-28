@@ -219,9 +219,146 @@ ATOM_ENCODING = {'C': [1, 0, 0, 0],
 
 
 
+def _res_coord_voxel_prep(res_data): 
+    """
+    Translates residue coordinates into a list of coordinates and their corresponding residue classes.
+    
+    Each residue is assigned to one of the following classes:
+    - Alipathic apolar (class 2): Alanine, Glycine, Isoleucine, Leucine, Methionine, Valine
+    - Aromatic (class 3): Phenylalanine, Tryptophan, Tyrosine
+    - Polar uncharged (class 4): Asparagine, Cysteine, Glutamine, Proline, Serine, Threonine
+    - Negatively charged (class 5): Aspartate, Glutamate
+    - Positively charged (class 6): Arginine, Histidine, Lysine
+    - Non-standard (class 7): Non-standard residues
+    
+    Parameters:
+    -----------
+    data : list
+        A list of lists, where each sublist contains residue information in the format:
+        [residue_number, residue_name, atom_name, x, y, z]
+    
+    Returns:
+    --------
+    list
+        A list of lists, where each sublist contains:
+        [x, y, z, [0, 0, 0, 0, 0, 0, 0, 0]] where the 1-based index of the residue class is set to 1.
+    
+    Example:
+    --------
+    Input:
+    [['24', 'GLU', 'OE2', '27.382', '-3.966', '-2.635']]
+    
+    Output:
+    [[27.382, -3.966, -2.635, [0, 0, 0, 0, 1, 0, 0, 0]]]
+    """
+    
+    # Define residue classes
+    residue_classes = {'ALA': 2,'GLY': 2,'ILE': 2,'LEU': 2,'MET': 2,'VAL': 2,
+                       'PHE': 3,'TRP': 3,'TYR': 3,
+                       'ASN': 4,'CYS': 4,'GLN': 4,'PRO': 4,'SER': 4,'THR': 4,
+                       'ASP': 5,'GLU': 5,
+                       'ARG': 6,'HIS': 6,'LYS': 6,
+                       'UNK': 7,'NON': 7}
+
+    translated_data = []
+    for _olfr in res_data:
+        _olfr_res = []
+        for _res in _olfr: 
+            x, y, z = map(float, _res[3:6])  # Extract coordinates and convert to float
+            residue = _res[1]  # Extract residue name
+            cls = residue_classes.get(residue, 7)  # Default to class 7 if residue not found
+            class_vector = [0] * 8  # Initialize all-zero vector
+            class_vector[cls] = 1  # Set appropriate class index to 1
+            _olfr_res.append([x, y, z, class_vector])  # Append the result
+        translated_data.append(_olfr_res)
+    return translated_data
+
+def voxelize_cavity(cavity_coords, 
+                    residue_coords=None, 
+                    resolution=1):
+    """
+    Voxelizes 3D coordinates by creating a voxel grid representation.
+    If residue_coords are provided, each voxel will store an 8-element one-hot encoded array.
+    If residue_coords are not provided, each voxel will store a single value: 0 (empty) or 1 (occupied).
+    
+    :param cavity_coords: 
+        List of lists containing 3D coordinates for cavities.
+        Example: 
+        [
+            [array([x1, y1, z1]), array([x2, y2, z2])],
+            [array([x3, y3, z3]), array([x4, y4, z4])]
+        ]
+    
+    :param residue_coords: 
+        List of lists containing residue interaction data with one-hot encoded classes.
+        Each residue coordinate must be in the form:
+        [x, y, z, one_hot_class (length 8)].
+        Example:
+        [
+            [[x1, y1, z1, [1, 0, 0, 0, 0, 0, 0, 0]], ...],
+            [[x2, y2, z2, [0, 1, 0, 0, 0, 0, 0, 0]], ...]
+        ]
+        Default is None. If None, voxel grid will store a single value at each position.
+
+    :param resolution: 
+        Size of each voxel (default is 1).
+        Determines the granularity of the voxel grid.
+    
+    :return: 
+        - List of voxel grids for each cavity. 
+          Each grid is a numpy array of shape X x Y x Z x N, where N = 8 (if residue_coords is supplied)
+          or N = 1 (if residue_coords is None).
+        - Tuple of the grid shape (X, Y, Z).
+    """
+    # Handle residue coordinate preparation if supplied
+    residue_coords_class = _res_coord_voxel_prep(residue_coords) if residue_coords else None
+
+    # Gather all coordinates (cavity and residue) for defining grid boundaries
+    all_coords = list(np.concatenate(cavity_coords, axis=0))
+    if residue_coords_class:
+        all_coords.extend([_coord[:3] for _all_coord in residue_coords_class for _coord in _all_coord])
+    
+    # Compute grid boundaries
+    min_coords = np.min(all_coords, axis=0)
+    max_coords = np.max(all_coords, axis=0)
+    
+    # Define voxel grid shape
+    grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int)
+    
+    # Initialize voxelized data
+    voxelized_data = []
+    
+    for i, cavity in enumerate(cavity_coords):
+        if residue_coords_class:
+            # 8-dimensional grid for one-hot encoded data
+            voxel_grid = np.zeros((*grid_shape, 8), dtype=int)
+            coords_data = [[_coord[0], _coord[1], _coord[2], [1, 0, 0, 0, 0, 0, 0, 0]] for _coord in cavity]
+            coords_data.extend(residue_coords_class[i])
+        else:
+            # 1-dimensional grid for binary data
+            voxel_grid = np.zeros((*grid_shape, 1), dtype=int)
+            coords_data = [[_coord[0], _coord[1], _coord[2], [1]] for _coord in cavity]
+        
+        # Map coordinates to voxel grid
+        for point in coords_data:
+            grid_x = int((point[0] - min_coords[0]) // resolution)
+            grid_y = int((point[1] - min_coords[1]) // resolution)
+            grid_z = int((point[2] - min_coords[2]) // resolution)
+            
+            # Update voxel grid with the corresponding value (one-hot or binary)
+            voxel_grid[grid_x, grid_y, grid_z] = point[3]
+        
+        # Append the voxel grid for the current cavity
+        voxelized_data.append(voxel_grid)
+    
+    return voxelized_data, grid_shape
+
 
 def voxelize_coordinates(cavity_coords, resolution=1):
     """
+    ********** DEPRECATED ********** 
+    USE voxelize_cavity INSTEAD. 
+    
     Voxelizes the 3D coordinates by placing 1s in voxels that are occupied by coordinates.
     
     :param cavity_coords: List of lists containing 3D coordinates for each Olfr

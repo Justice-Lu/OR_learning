@@ -7,3 +7,7 @@ __pycache__
 .ipynb_checkpoints/
 notebooks/old/
 files/
+
+output/bc_voxel
+output/voxel_preprocessing
+output/pp_binding_cavity

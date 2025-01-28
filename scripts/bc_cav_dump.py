@@ -50,18 +50,38 @@ pdb_files = os.listdir(AF2_PATH)
 Olfr_DL = pd.read_csv('/data/jlu/OR_learning/files/Olfr_DL.csv', index_col=0)
 
 
+from tqdm import tqdm
+
 # Running pyKVFinder standard workflow for cavity grid
 bc_cav_coords = {}
+bc_res_coords = {}
 
 for _pdb in tqdm(pdb_files): 
     _olfr = _pdb.split('_')[0]
     if _olfr in list(Olfr_DL.Olfr): 
         bc_results = pyKVFinder.run_workflow(os.path.join(AF2_PATH, _pdb))
+        bc_atomic = pyKVFinder.read_pdb(os.path.join(AF2_PATH, _pdb))
         
-        # Store in dict with DL_OR name
-        bc_cav_coords[Olfr_DL[Olfr_DL.Olfr == _olfr].DL_OR.item()] = bc.grid2coords(bc_results)
-
+        # Store cavity coordinates in dict with DL_OR name
+                # Store cavity coordinates in dict with DL_OR name
+        combined_coords = []
+        for _cav_coords in bc.grid2coords(bc_results)[0].values(): 
+            combined_coords.extend(_cav_coords)
+        bc_cav_coords[Olfr_DL[Olfr_DL.Olfr == _olfr].DL_OR.item()] = combined_coords
+                
+        # Get cavity interacting residue coords 
+        res_coords = []
+        res_coords_dict = bc.res2atomic(bc_results, bc_atomic)
+        for _res in res_coords_dict: 
+            res_coords.extend(res_coords_dict[_res][:, [0,2,3,4,5,6]].tolist())  # Extract [ResNum, AA, Atom, x, y, z]
+        # remove duplicated residues 
+        bc_res_coords[Olfr_DL[Olfr_DL.Olfr == _olfr].DL_OR.item()] = [list(x) for x in set(tuple(entry) for entry in res_coords)]
+        
 
 # Save dict as pkl 
 with open('/data/jlu/OR_learning/files/dict_bc_pyKVcav_tmaligned.pkl', 'wb') as f:
     pickle.dump(bc_cav_coords, f)
+with open('/data/jlu/OR_learning/files/dict_bc_pyKVres_tmaligned.pkl', 'wb') as f:
+    pickle.dump(bc_res_coords, f)
+
+

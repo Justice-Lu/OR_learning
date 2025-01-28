@@ -288,3 +288,33 @@ def coords2pdb(coords: Dict[str, np.ndarray], filename: str = "cavity.pdb") -> N
                     )
                 )
                 
+
+def _get_atomic_information(
+    residues: Dict[str, List[str]], cavtag: str, atomic: np.ndarray
+) -> np.ndarray:
+    # Get atomic information from residues
+    resatomic = np.array(["_".join(item[0:3]) for item in residues[cavtag]])
+
+    # Extract atominfo from atomic
+    atominfo = np.asarray(
+        ([[f"{atom[0]}_{atom[1]}_{atom[2]}", atom[3]] for atom in atomic[:, :4]])
+    )
+
+    # Get coordinates of residues
+    indexes = np.in1d(atominfo[:, 0], resatomic)
+
+    return atomic[indexes]
+
+
+def res2atomic(results: pyKVFinder.pyKVFinderResults, atomic: np.ndarray) -> Dict[str, np.ndarray]:
+    # Prepare dictionary to store residues coordinates
+    residues_coords = {key: [] for key in results.residues.keys()}
+
+    for cavtag in residues_coords.keys():
+        # Get coordinates of residues
+        residues_coords[cavtag] = _get_atomic_information(
+            results.residues, cavtag, atomic
+        )
+
+    return residues_coords
+
