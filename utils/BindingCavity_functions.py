@@ -1,6 +1,8 @@
 import numpy as np
 import plotly.graph_objects as go
 import matplotlib.cm as cm
+from sklearn.cluster import DBSCAN
+from scipy.spatial import ConvexHull, Delaunay
 
 import color_function as cf
 
@@ -257,11 +259,17 @@ def _indexes2coord(
 def grid2coords(results: pyKVFinder.pyKVFinderResults) -> dict:
     # Prepare dictionary to store cavities coordinates
     cavities_coords = {key: [] for key in results.residues.keys()}
-
+    cavities_surface_coords = {key: [] for key in results.residues.keys()}
+    
     for cavnum, key in enumerate(cavities_coords, start=2):
+        # Save cavity coordinates
         indexes = _grid2indexes(results.cavities, cavnum)
         coords = _indexes2coord(indexes, results._step, results._vertices)
         cavities_coords[key] = coords
+        # Save surface coordinates (Useful later when defining canonical binding cavity space)
+        indexes = _grid2indexes(results.surface, cavnum)
+        coords = _indexes2coord(indexes, results._step, results._vertices)
+        cavities_surface_coords[key] = coords
         
     # Get cavities center and limits
     center = [{key: value.mean(axis=0)} for key, value in cavities_coords.items()]
@@ -273,7 +281,7 @@ def grid2coords(results: pyKVFinder.pyKVFinderResults) -> dict:
         for key, value in cavities_coords.items()
     }
 
-    return cavities_coords, center, minmax
+    return cavities_coords, cavities_surface_coords, center, minmax
 
 
 def coords2pdb(coords: Dict[str, np.ndarray], filename: str = "cavity.pdb") -> None:
@@ -318,3 +326,109 @@ def res2atomic(results: pyKVFinder.pyKVFinderResults, atomic: np.ndarray) -> Dic
 
     return residues_coords
 
+
+def define_binding_cavity_zone(bc_cavsurf_coords, expansion_distance=3.0, sampling_interval=10):
+    """
+    Defines the overall binding cavity zone by identifying the largest cavity for each OR, 
+    expanding it, and superimposing the expanded zones.
+
+    :param bc_cavsurf_coords: 
+        Dictionary where keys are OR names and values are numpy arrays of shape (N, 3) representing cavity surface coordinates.
+    :param expansion_distance: 
+        Float, the distance to expand the largest cavity surface points.
+    
+    :return: 
+        A dictionary with the following keys:
+        - "largest_cavity_coords": A dictionary of largest cavity coordinates for each OR.
+        - "expanded_coords": A dictionary of expanded cavity zones for each OR.
+    """
+
+    largest_cavity_coords = {}
+    expanded_coords = {}
+
+    # Find the largest cavity for each OR and expand it
+    for _Or in bc_cavsurf_coords.keys():
+        # Cluster points to identify distinct cavities
+        dbscan = DBSCAN(eps=2, min_samples=5)
+        labels = dbscan.fit_predict(bc_cavsurf_coords[_Or])
+
+        # Calculate cavity sizes
+        cavity_sizes = {label: np.sum(labels == label) for label in set(labels) if label != -1}
+
+        # Find the largest cavity
+        largest_cavity_label = max(cavity_sizes, key=cavity_sizes.get)
+        largest_cavity_coords[_Or] = np.array(bc_cavsurf_coords[_Or])[labels == largest_cavity_label]
+        
+        # Expand each surface point outward by the specified distance
+        expanded_zone = []
+        for point in largest_cavity_coords[_Or]:
+            for dx in np.arange(-expansion_distance, expansion_distance + 1, 1):
+                for dy in np.arange(-expansion_distance, expansion_distance + 1, 1):
+                    for dz in np.arange(-expansion_distance, expansion_distance + 1, 1):
+                        # Only add points within the desired expansion radius
+                        if np.sqrt(dx**2 + dy**2 + dz**2) <= expansion_distance:
+                            expanded_zone.append(point + np.array([dx, dy, dz]))
+
+        # Store unique expanded coordinates for the current OR
+        expanded_coords[_Or] = np.unique(expanded_zone, axis=0)
+
+    return expanded_coords, largest_cavity_coords
+
+def filter_coordinates_within_cavity(cavity_zone, 
+                                     coordinates, 
+                                     is_residue=False):
+    """
+    Filters 3D coordinates or residue coordinates to include only those that lie within the convex hull 
+    of a specified cavity zone. If residue coordinates are used, entire residues are retained if any of 
+    their atoms fall within the cavity zone.
+
+    :param cavity_zone: 
+        A numpy array of shape (N, 3) representing the 3D points defining the cavity zone.
+    :param coordinates: 
+        If is_residue is False:
+            A numpy array of shape (M, 3) representing the 3D points to be filtered.
+        If is_residue is True:
+            A numpy array of shape (M, 6) where the first three columns represent residue metadata 
+            (e.g., residue number, name, atom type) and the last three columns represent the 3D coordinates.
+    :param is_residue: 
+        Boolean, if True, the input coordinates are treated as residue coordinates. If False, 
+        only raw 3D coordinates are used.
+    
+    :return: 
+        A numpy array of filtered coordinates. 
+        If is_residue is False, the array has shape (K, 3). 
+        If is_residue is True, the array has shape (K, 6), retaining all rows for residues with at least 
+        one atom in the cavity zone.
+    """
+    # Validate input dimensions
+    if cavity_zone.shape[1] != 3:
+        raise ValueError("cavity_zone must have shape (N, 3).")
+    if not is_residue and coordinates.shape[1] != 3:
+        raise ValueError("coordinates must have shape (M, 3) when is_residue is False.")
+    if is_residue and coordinates.shape[1] != 6:
+        raise ValueError("coordinates must have shape (M, 6) when is_residue is True.")
+    
+    # Step 1: Compute the convex hull
+    hull = ConvexHull(cavity_zone)
+
+    # Step 2: Create a Delaunay triangulation for efficient point-in-hull checks
+    hull_delaunay = Delaunay(cavity_zone)
+
+    if not is_residue:
+        # Filter points that lie within the convex hull
+        filtered_coordinates = coordinates[hull_delaunay.find_simplex(coordinates) >= 0]
+    else:
+        # Extract the 3D coordinates from the residue data
+        residue_coords = coordinates[:, 3:].astype(float)
+
+        # Check if each atom lies within the cavity zone
+        inside_mask = hull_delaunay.find_simplex(residue_coords) >= 0
+
+        # Identify unique residues (e.g., by residue ID) where at least one atom is inside
+        residue_ids_inside = np.unique(coordinates[inside_mask][:, 0])
+
+        # Keep all rows corresponding to these residues
+        filtered_coordinates = coordinates[np.isin(coordinates[:, 0], residue_ids_inside)]
+        # filtered_coordinates = filtered_coordinates[:,3:] # Taking only coordinates 
+
+    return filtered_coordinates

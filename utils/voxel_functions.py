@@ -292,12 +292,10 @@ def voxelize_cavity(cavity_coords,
     :param residue_coords: 
         List of lists containing residue interaction data with one-hot encoded classes.
         Each residue coordinate must be in the form:
-        [x, y, z, one_hot_class (length 8)].
+        [residue_number, residue_name, atom_name, x, y, z].
         Example:
-        [
-            [[x1, y1, z1, [1, 0, 0, 0, 0, 0, 0, 0]], ...],
-            [[x2, y2, z2, [0, 1, 0, 0, 0, 0, 0, 0]], ...]
-        ]
+        [['24', 'GLU', 'OE2', '27.382', '-3.966', '-2.635']]
+
         Default is None. If None, voxel grid will store a single value at each position.
 
     :param resolution: 
@@ -323,13 +321,13 @@ def voxelize_cavity(cavity_coords,
     max_coords = np.max(all_coords, axis=0)
     
     # Define voxel grid shape
-    grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int)
+    grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int) + 1
     
     # Initialize voxelized data
     voxelized_data = []
     
     for i, cavity in enumerate(cavity_coords):
-        if residue_coords_class:
+        if residue_coords_class and i < len(residue_coords):
             # 8-dimensional grid for one-hot encoded data
             voxel_grid = np.zeros((*grid_shape, 8), dtype=int)
             coords_data = [[_coord[0], _coord[1], _coord[2], [1, 0, 0, 0, 0, 0, 0, 0]] for _coord in cavity]
@@ -393,9 +391,4 @@ def voxelize_coordinates(cavity_coords, resolution=1):
         voxelized_data.append(voxel_grid)
     
     return voxelized_data, grid_shape
-
-
-
-
-
 

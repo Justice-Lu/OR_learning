@@ -43,44 +43,62 @@ sys.path.append('/data/jlu/OR_learning/utils/')
 import BindingCavity_functions as bc 
 
 import pyKVFinder
+from sklearn.cluster import DBSCAN
+
 
 # Define paths of AF files 
 AF2_PATH = '/data/jlu/AF_files/AF_tmaligned_pdb'
 pdb_files = os.listdir(AF2_PATH)
 Olfr_DL = pd.read_csv('/data/jlu/OR_learning/files/Olfr_DL.csv', index_col=0)
+Olfr_DL = dict(zip(Olfr_DL.Olfr, Olfr_DL.DL_OR))
 
 
 from tqdm import tqdm
 
 # Running pyKVFinder standard workflow for cavity grid
 bc_cav_coords = {}
+bc_cavsurf_coords = {}
 bc_res_coords = {}
 
 for _pdb in tqdm(pdb_files): 
     _olfr = _pdb.split('_')[0]
-    if _olfr in list(Olfr_DL.Olfr): 
-        bc_results = pyKVFinder.run_workflow(os.path.join(AF2_PATH, _pdb))
-        bc_atomic = pyKVFinder.read_pdb(os.path.join(AF2_PATH, _pdb))
-        
-        # Store cavity coordinates in dict with DL_OR name
-                # Store cavity coordinates in dict with DL_OR name
-        combined_coords = []
-        for _cav_coords in bc.grid2coords(bc_results)[0].values(): 
-            combined_coords.extend(_cav_coords)
-        bc_cav_coords[Olfr_DL[Olfr_DL.Olfr == _olfr].DL_OR.item()] = combined_coords
-                
-        # Get cavity interacting residue coords 
-        res_coords = []
-        res_coords_dict = bc.res2atomic(bc_results, bc_atomic)
-        for _res in res_coords_dict: 
-            res_coords.extend(res_coords_dict[_res][:, [0,2,3,4,5,6]].tolist())  # Extract [ResNum, AA, Atom, x, y, z]
-        # remove duplicated residues 
-        bc_res_coords[Olfr_DL[Olfr_DL.Olfr == _olfr].DL_OR.item()] = [list(x) for x in set(tuple(entry) for entry in res_coords)]
-        
+    bc_results = pyKVFinder.run_workflow(os.path.join(AF2_PATH, _pdb))
+    bc_atomic = pyKVFinder.read_pdb(os.path.join(AF2_PATH, _pdb))
+    
+    if bc_results == None: 
+        print(f"NOT GENERATED . . . {_olfr}..........................................")
+        continue 
+    
+    # Store cavity coordinates in dict with DL_OR name
+            # Store cavity coordinates in dict with DL_OR name
+    combined_coords = []
+    bc_results_coord = bc.grid2coords(bc_results)
+    # Append cavity coordinates into dict 
+    for _cav_coords in bc_results_coord[0].values(): 
+        combined_coords.extend(_cav_coords)
+    bc_cav_coords[Olfr_DL.get(_olfr, _olfr)] = combined_coords
+    
+    combined_coords = []
+    # Append cavity surface coordinates into dict 
+    for _cavsurf_coords in bc_results_coord[1].values(): 
+        combined_coords.extend(_cavsurf_coords)
+    bc_cavsurf_coords[Olfr_DL.get(_olfr, _olfr)] = combined_coords
+    
+    
+    # Get cavity interacting residue coords 
+    res_coords = []
+    res_coords_dict = bc.res2atomic(bc_results, bc_atomic)
+    for _res in res_coords_dict: 
+        res_coords.extend(res_coords_dict[_res][:, [0,2,3,4,5,6]].tolist())  # Extract [ResNum, AA, Atom, x, y, z]
+    # remove duplicated residues 
+    bc_res_coords[Olfr_DL.get(_olfr, _olfr)] = [list(x) for x in set(tuple(entry) for entry in res_coords)]
+           
 
 # Save dict as pkl 
 with open('/data/jlu/OR_learning/files/dict_bc_pyKVcav_tmaligned.pkl', 'wb') as f:
     pickle.dump(bc_cav_coords, f)
+with open('/data/jlu/OR_learning/files/dict_bc_pyKVcavsurf_tmaligned.pkl', 'wb') as f:
+    pickle.dump(bc_cavsurf_coords, f)
 with open('/data/jlu/OR_learning/files/dict_bc_pyKVres_tmaligned.pkl', 'wb') as f:
     pickle.dump(bc_res_coords, f)
 
