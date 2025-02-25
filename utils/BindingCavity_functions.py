@@ -1,4 +1,5 @@
 import numpy as np
+import os 
 import plotly.graph_objects as go
 import matplotlib.cm as cm
 from sklearn.cluster import DBSCAN
@@ -9,7 +10,15 @@ import color_function as cf
 import pyKVFinder
 from typing import List, Dict
 
-def load_pdb_coordinates(pdb_file):
+
+AA_THREE_TO_ONE = {
+        "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
+        "GLU": "E", "GLN": "Q", "GLY": "G", "HIS": "H", "ILE": "I",
+        "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
+        "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V"
+}
+
+def load_pdb_coordinates(pdb_file, single_aa_name=True):
     """
     Extracts atomic coordinates and converts amino acid sequence to single-letter notation.
     
@@ -20,12 +29,7 @@ def load_pdb_coordinates(pdb_file):
     coords, backbone, seq = load_pdb_coordinates(pdb_file)
 
     """
-    aa_three_to_one = {
-            "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
-            "GLU": "E", "GLN": "Q", "GLY": "G", "HIS": "H", "ILE": "I",
-            "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
-            "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V"
-    }
+
     coords = []
     backbone = []
     sequence = []
@@ -42,9 +46,15 @@ def load_pdb_coordinates(pdb_file):
                     backbone.append([x, y, z])
                     # Extract residue name
                     residue = parts[3]  # Residue name
-                    single_letter = aa_three_to_one.get(residue, "X")  # Use "X" for unknown residues
-                    sequence.append(single_letter)
-    return np.array(coords), np.array(backbone), "".join(sequence)
+                    if single_aa_name: 
+                        single_letter = AA_THREE_TO_ONE.get(residue, "X")  # Use "X" for unknown residues
+                        sequence.append(single_letter)
+                    else: 
+                        sequence.append((residue, parts[5])) # Store aa and residue number in tuple 
+    if single_aa_name: 
+        return np.array(coords), np.array(backbone), "".join(sequence)
+    else: 
+        return np.array(coords), np.array(backbone), sequence
 
 def single_Olfr_cavity(arr, color_dict=None, trace_size=1, trace_opacity=0.3):
     """
@@ -326,7 +336,7 @@ def res2atomic(results: pyKVFinder.pyKVFinderResults, atomic: np.ndarray) -> Dic
 
     return residues_coords
 
-
+# Functions below for defining canonical binding cavity and identifying residues 
 def define_binding_cavity_zone(bc_cavsurf_coords, expansion_distance=3.0, sampling_interval=10):
     """
     Defines the overall binding cavity zone by identifying the largest cavity for each OR, 

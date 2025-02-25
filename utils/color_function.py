@@ -1,4 +1,5 @@
-import plotly.colors
+import numpy as np 
+import plotly.colors as pc 
 import random
 from matplotlib import cm, colors as mcolors
 
@@ -25,59 +26,59 @@ def get_color(colorscale_name, loc):
     return get_continuous_color(colorscale, loc)
         
 
-# Identical to Adam's answer
 
-def get_continuous_color(colorscale, intermed):
+def get_continuous_colors(values, colormap="RdBu_r", midpoint=None):
     """
-    Plotly continuous colorscales assign colors to the range [0, 1]. This function computes the intermediate
-    color for any value in that range.
+    Assigns colors to a list or dictionary of values using a continuous colorscale.
 
-    Plotly doesn't make the colorscales directly accessible in a common format.
-    Some are ready to use:
-    
-        colorscale = plotly.colors.PLOTLY_SCALES["Greens"]
+    Parameters:
+    - values (list, dict, or Series): A dictionary {index: value}, Pandas Series, or a list of values.
+    - colormap (str): A Matplotlib colormap name (e.g., 'RdBu_r', 'viridis', 'coolwarm').
+    - midpoint (float, optional): The value to center the colormap around. If None, uses the median.
 
-    Others are just swatches that need to be constructed into a colorscale:
-
-        viridis_colors, scale = plotly.colors.convert_colors_to_same_type(plotly.colors.sequential.Viridis)
-        colorscale = plotly.colors.make_colorscale(viridis_colors, scale=scale)
-
-    :param colorscale: A plotly continuous colorscale defined with RGB string colors.
-    :param intermed: value in the range [0, 1]
-    :return: color in rgb string format
-    :rtype: str
+    Returns:
+    - dict: A dictionary mapping indices (or positions if input is a list) to colors in hex format.
     """
-    if len(colorscale) < 1:
-        raise ValueError("colorscale must have at least one color")
+    # Convert Pandas Series to dictionary if applicable
+    if hasattr(values, "to_dict"):
+        values = values.to_dict()
 
-    hex_to_rgb = lambda c: "rgb" + str(ImageColor.getcolor(c, "RGB"))
+    # Extract indices and values
+    if isinstance(values, dict):
+        indices, vals = list(values.keys()), np.array(list(values.values()))
+    else:
+        indices, vals = range(len(values)), np.array(values)
 
-    if intermed <= 0 or len(colorscale) == 1:
-        c = colorscale[0][1]
-        return c if c[0] != "#" else hex_to_rgb(c)
-    if intermed >= 1:
-        c = colorscale[-1][1]
-        return c if c[0] != "#" else hex_to_rgb(c)
+    # Handle edge case where all values are the same
+    if np.all(vals == vals[0]):
+        return {idx: mcolors.to_hex(cm.get_cmap(colormap)(0.5)) for idx in indices}
 
-    for cutoff, color in colorscale:
-        if intermed > cutoff:
-            low_cutoff, low_color = cutoff, color
-        else:
-            high_cutoff, high_color = cutoff, color
-            break
+    # Define midpoint if not provided (default: median)
+    if midpoint is None:
+        midpoint = np.median(vals)
 
-    if (low_color[0] == "#") or (high_color[0] == "#"):
-        # some color scale names (such as cividis) returns:
-        # [[loc1, "hex1"], [loc2, "hex2"], ...]
-        low_color = hex_to_rgb(low_color)
-        high_color = hex_to_rgb(high_color)
+    # Determine min and max values
+    min_val, max_val = np.min(vals), np.max(vals)
 
-    return plotly.colors.find_intermediate_color(
-        lowcolor=low_color,
-        highcolor=high_color,
-        intermed=((intermed - low_cutoff) / (high_cutoff - low_cutoff)),
-        colortype="rgb",
-    )
+    # Adjust the color scale if all values are on one side of the midpoint
+    if min_val >= midpoint:  # All values are positive
+        max_val = max(max_val, abs(midpoint))  # Ensure symmetry
+        min_val = -max_val
+    elif max_val <= midpoint:  # All values are negative
+        min_val = min(min_val, -abs(midpoint))  # Ensure symmetry
+        max_val = -min_val
+
+    # Normalize values between [0, 1] while keeping midpoint centered
+    if min_val < midpoint < max_val:
+        norm = mcolors.TwoSlopeNorm(vmin=min_val, vcenter=midpoint, vmax=max_val)
+    else:
+        norm = mcolors.Normalize(vmin=min_val, vmax=max_val)
+
+    # Get the colormap and apply normalization
+    cmap = cm.get_cmap(colormap)
+    colors = {idx: mcolors.to_hex(cmap(norm(value))) for idx, value in zip(indices, vals)}
+
+    return colors
 
 def distinct_colors(label_list, category='tab10', custom_color=None, random_state=0):
     """
@@ -92,12 +93,6 @@ def distinct_colors(label_list, category='tab10', custom_color=None, random_stat
 
     Returns:
     dict: A dictionary where labels are keys and distinct colors (in hexadecimal format) are values.
-
-    Example:
-    >>> labels = ['A', 'B', 'C']
-    >>> color_mapping = distinct_colors(labels, category='tab10')
-    >>> print(color_mapping)
-    {'A': '#1f77b4', 'B': '#ff7f0e', 'C': '#2ca02c'}
     """
     random.seed(random_state)
     
@@ -116,28 +111,36 @@ def distinct_colors(label_list, category='tab10', custom_color=None, random_stat
             color_dict[_label] = custom_color[i]
         return color_dict
 
-    color_palette = None
+    color_palette = []
 
-    # Handle custom categories
+    # Handle predefined categories
     if category in ['warm', 'floral', 'rainbow', 'pastel']: 
         if category == 'warm':
-            color_palette = random.sample(warm_colors, len(warm_colors))
+            color_palette = warm_colors
         elif category == 'floral':
-            color_palette = random.sample(floral_colors, len(floral_colors))
+            color_palette = floral_colors
         elif category == 'rainbow':
-            color_palette = random.sample(rainbow_colors, len(rainbow_colors))
+            color_palette = rainbow_colors
         elif category == 'pastel': 
-            color_palette = random.sample(pastel_colors, len(pastel_colors))
-        # else:
-        #     color_palette = random.sample(warm_colors + floral_colors + rainbow_colors + pastel_colors, len(label_list))
-    # Handle matplotlib color palettes
-    elif category in mcolors.TABLEAU_COLORS or category in cm.cmaps_listed or hasattr(cm, category):
+            color_palette = pastel_colors
+
+        # If more labels than available colors, interpolate colors
+        if len(label_list) > len(color_palette):
+            cmap = cm.get_cmap("tab20")  # Use a larger colormap
+            num_colors = len(label_list)
+            color_palette = [mcolors.to_hex(cmap(i / num_colors)) for i in range(num_colors)]
+    
+    # Handle matplotlib colormaps
+    elif category in cm.cmaps_listed or hasattr(cm, category):
         cmap = cm.get_cmap(category) if hasattr(cm, category) else cm.get_cmap('tab10')
         num_colors = len(label_list)
-        color_palette = [mcolors.to_hex(cmap(i / num_colors)) for i in range(num_colors)]
-    
+        
+        # Ensure unique colors using interpolation
+        color_palette = [mcolors.to_hex(cmap(i / (num_colors - 1))) for i in range(num_colors)]
+
+    # Assign distinct colors to each label
     for i, label in enumerate(label_list):
-        color_dict[label] = color_palette[i % len(color_palette)]
+        color_dict[label] = color_palette[i]
     
     return color_dict
 
