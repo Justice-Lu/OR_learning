@@ -52,14 +52,28 @@ def align_and_save(ref_pdb, target_pdb, output_pdb, align_with='backbone'):
     coords1, backbone1, seq1 = load_pdb_coordinates(ref_pdb)
     coords2, backbone2, seq2 = load_pdb_coordinates(target_pdb)
     
-    # Perform alignment
+
+    # Select alignment method
     if align_with == 'backbone':
-        aligned_result = tm_align(backbone1, backbone2, seq1, seq2)
+        ref_atoms, tgt_atoms = backbone1, backbone2
     elif align_with == 'full_coords':
-        aligned_result = tm_align(coords1, coords2, seq1, seq2)
-    
+        ref_atoms, tgt_atoms = coords1, coords2
+    else:
+        raise ValueError("align_with must be 'backbone' or 'full_coords'")
+
+    # Compute centroids
+    centroid_ref = np.mean(ref_atoms, axis=0)
+    centroid_tgt = np.mean(tgt_atoms, axis=0)
+
+    # Translate to origin
+    ref_atoms_centered = ref_atoms - centroid_ref
+    tgt_atoms_centered = tgt_atoms - centroid_tgt
+
+    # Perform TM-align
+    aligned_result = tm_align(ref_atoms_centered, tgt_atoms_centered, seq1, seq2)
+
     # Rotate and translate all atom coordinates
-    transformed_coords = np.dot(coords2, aligned_result.u)
+    transformed_coords = np.dot(coords2 - centroid_tgt, aligned_result.u) + centroid_ref
 
     # Save the rotated PDB file
     with open(target_pdb, 'r') as file_in, open(output_pdb, 'w') as file_out:
@@ -92,7 +106,7 @@ def align_and_save(ref_pdb, target_pdb, output_pdb, align_with='backbone'):
                 # Write the updated line in PDB format
                 file_out.write(
                     f"{line[:6]}{serial:5d} {name:<4}{alt_loc}{res_name:>3} {chain}"
-                    f"{res_num:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
+                    f"{res_num:4d}    {x:8.3f} {y:8.3f} {z:8.3f}"
                     f"{occupancy:6.2f}{temp_factor:6.2f}          {element:>2}{charge:>2}\n"
                 )
             else:
