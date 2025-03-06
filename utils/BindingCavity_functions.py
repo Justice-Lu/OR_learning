@@ -6,6 +6,7 @@ from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull, Delaunay
 
 import color_function as cf
+from pdb_functions import load_pdb_coordinates
 
 import pyKVFinder
 from typing import List, Dict
@@ -18,43 +19,43 @@ AA_THREE_TO_ONE = {
         "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V"
 }
 
-def load_pdb_coordinates(pdb_file, single_aa_name=True):
-    """
-    Extracts atomic coordinates and converts amino acid sequence to single-letter notation.
+# def load_pdb_coordinates(pdb_file, single_aa_name=True):
+#     """
+#     Extracts atomic coordinates and converts amino acid sequence to single-letter notation.
     
-    :param pdb_file: Path to the PDB file.
-    :return: A tuple of (coordinates, sequence in single-letter notation).
+#     :param pdb_file: Path to the PDB file.
+#     :return: A tuple of (coordinates, sequence in single-letter notation).
     
-    :usage
-    coords, backbone, seq = load_pdb_coordinates(pdb_file)
+#     :usage
+#     coords, backbone, seq = load_pdb_coordinates(pdb_file)
 
-    """
+#     """
 
-    coords = []
-    backbone = []
-    sequence = []
-    with open(pdb_file, 'r') as file:
-        for line in file:
-            if line.startswith("ATOM"):
-                parts = line.split()
-                # Extract coordinates
-                x = float(parts[6])
-                y = float(parts[7])
-                z = float(parts[8])
-                coords.append([x,y,z])
-                if " CA " in line:  # Select alpha-carbon atoms
-                    backbone.append([x, y, z])
-                    # Extract residue name
-                    residue = parts[3]  # Residue name
-                    if single_aa_name: 
-                        single_letter = AA_THREE_TO_ONE.get(residue, "X")  # Use "X" for unknown residues
-                        sequence.append(single_letter)
-                    else: 
-                        sequence.append((residue, parts[5])) # Store aa and residue number in tuple 
-    if single_aa_name: 
-        return np.array(coords), np.array(backbone), "".join(sequence)
-    else: 
-        return np.array(coords), np.array(backbone), sequence
+#     coords = []
+#     backbone = []
+#     sequence = []
+#     with open(pdb_file, 'r') as file:
+#         for line in file:
+#             if line.startswith("ATOM"):
+#                 parts = line.split()
+#                 # Extract coordinates
+#                 x = float(parts[6])
+#                 y = float(parts[7])
+#                 z = float(parts[8])
+#                 coords.append([x,y,z])
+#                 if " CA " in line:  # Select alpha-carbon atoms
+#                     backbone.append([x, y, z])
+#                     # Extract residue name
+#                     residue = parts[3]  # Residue name
+#                     if single_aa_name: 
+#                         single_letter = AA_THREE_TO_ONE.get(residue, "X")  # Use "X" for unknown residues
+#                         sequence.append(single_letter)
+#                     else: 
+#                         sequence.append((residue, parts[5])) # Store aa and residue number in tuple 
+#     if single_aa_name: 
+#         return np.array(coords), np.array(backbone), "".join(sequence)
+#     else: 
+#         return np.array(coords), np.array(backbone), sequence
 
 def single_Olfr_cavity(arr, color_dict=None, trace_size=1, trace_opacity=0.3):
     """
@@ -335,6 +336,49 @@ def res2atomic(results: pyKVFinder.pyKVFinderResults, atomic: np.ndarray) -> Dic
         )
 
     return residues_coords
+
+def run_pyKVFinder_workflow(pdb_files, dict_keys=None):
+    """
+    Runs the pyKVFinder standard workflow for a list of PDB files and extracts cavity, cavity surface,
+    and interacting residue coordinates.
+
+    :param pdb_files: List of PDB file paths.
+    :return: Tuple (cav_coords, cavsurf_coords, res_coords), where each is a dictionary 
+             mapping PDB identifiers to coordinate lists.
+    """
+    cav_coords = {}
+    cavsurf_coords = {}
+    res_coords = {}
+    
+    # unique_i = 1 # for differentiating similar naming pdbs
+    for i, _pdb in enumerate(pdb_files): 
+        
+        if dict_keys is None:
+            
+            _olfr = _pdb.split('/')[-1].replace('.pdb', '').replace('_tmaligned', '')
+            _olfr = f"{_olfr.split('.')[0]}_{str(i+1)}" if '.' in _olfr else _olfr
+
+        # Run pyKVFinder workflow
+        results = pyKVFinder.run_workflow(_pdb)
+        atomic_data = pyKVFinder.read_pdb(_pdb)
+
+        results_coord = grid2coords(results)
+
+        # Extract cavity coordinates
+        cav_coords[_olfr] = [coord for cavity in results_coord[0].values() for coord in cavity]
+
+        # Extract cavity surface coordinates
+        cavsurf_coords[_olfr] = [coord for surface in results_coord[1].values() for coord in surface]
+
+        # Extract cavity interacting residue coordinates
+        res_coords_dict = res2atomic(results, atomic_data)
+        res_coords[_olfr] = [
+            list(x) for x in set(
+                tuple(entry) for res in res_coords_dict for entry in res_coords_dict[res][:, [0, 2, 3, 4, 5, 6]].tolist()
+            )
+        ]
+
+    return cav_coords, cavsurf_coords, res_coords
 
 # Functions below for defining canonical binding cavity and identifying residues 
 def define_binding_cavity_zone(bc_cavsurf_coords, expansion_distance=3.0, sampling_interval=10):

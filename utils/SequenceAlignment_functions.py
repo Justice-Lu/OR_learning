@@ -1,8 +1,12 @@
 import numpy as np
+import os
+import re 
 import itertools
 from scipy.spatial.distance import squareform, pdist
 from sklearn.manifold import MDS
 from collections import Counter
+from tabulate import tabulate
+
 
 
 AA_THREE_TO_ONE = {
@@ -105,7 +109,8 @@ def structural_alignment_dp(ref_backbone, ref_sequence, tgt_backbone, tgt_sequen
 
 def generate_sequence_alignment_pairs_fromPDB(reference_pdb, 
                                               target_pdbs, 
-                                              load_pdb_fn, 
+                                              load_pdb_fn,
+                                              labels=None,  
                                               gap_penalty=5.0):
     """
     Generates a Chimera-like sequence alignment based on structural alignment of proteins.
@@ -125,14 +130,17 @@ def generate_sequence_alignment_pairs_fromPDB(reference_pdb,
     # alignment = {ref_basename: ref_sequence}
     alignment = {}
     
-    for target_pdb in target_pdbs:
+    for i, target_pdb in enumerate(target_pdbs):
         # if target_pdb == reference_pdb:
         #     continue
         _, tgt_backbone, tgt_sequence = load_pdb_fn(target_pdb)
         aligned_ref, aligned_tgt = structural_alignment_dp(
             ref_backbone, ref_sequence, tgt_backbone, tgt_sequence, gap_penalty
         )
-        tgt_basename = os.path.basename(target_pdb).split('_')[0]
+        if labels: 
+            tgt_basename = labels[i]
+        else: 
+            tgt_basename = os.path.basename(target_pdb).split('_')[0]
         alignment[tgt_basename] = (aligned_ref, aligned_tgt)
 
     return alignment
@@ -294,6 +302,68 @@ def trim_alignment(alignment_dict, gap_threshold=0.9):
     frequency_matrix /= len(filtered_alignment)
     
     return filtered_alignment, frequency_matrix
+
+
+def map_aligned_residues(original_residues, aligned_seq, check_match=True):
+    """
+    Maps original residue indices to their corresponding positions in the aligned sequence.
+    Optionally verifies if the amino acid matches at the new position.
+
+    :param original_residues: List of residue labels (e.g., ['G71', 'A85']).
+    :param aligned_seq: The gapped aligned sequence.
+    :param check_match: Whether to verify if the amino acid matches (default: True).
+    :return: Dictionary mapping original residue labels to aligned positions (and validation status if enabled).
+    """
+    # Convert original residue labels to numeric indices (1-based)
+    original_indices = {int(res[1:]): res[0] for res in original_residues}
+
+    count = 0  # Tracks residues in the original sequence (excluding '-')
+    index_mapping = []  # Store mapped indices with optional validation
+
+    for i, char in enumerate(aligned_seq):
+        if char != '-':
+            count += 1  # Increment for non-gap residues
+            if count in original_indices:
+                aligned_index = i + 1  # Convert to 1-based index
+                
+                # Check if the amino acid matches
+                expected_aa = original_indices[count]
+                actual_aa = char
+                match_status = expected_aa == actual_aa
+
+                if check_match:
+                    if match_status:
+                        # index_mapping += [f"{expected_aa}{aligned_index}"]
+                        index_mapping += [aligned_index]
+                else:                    
+                    # index_mapping += [f"{expected_aa}{aligned_index}"] 
+                    index_mapping += [aligned_index]
+
+    return index_mapping
+
+
+def map_aligned_indices(original_indices, aligned_seq):
+    """
+    Maps original residue indices to their new positions in the aligned sequence.
+
+    :param original_indices: Array of original residue indices (1-based).
+    :param original_seq: The ungapped original sequence.
+    :param aligned_seq: The gapped aligned sequence.
+    :return: Dictionary mapping original residue indices to aligned positions.
+    """
+    count = 0  # Tracks residues in the original sequence (excluding gaps)
+    # index_mapping = {}  # Store mapped indices
+    index_mapping = []
+    for i, char in enumerate(aligned_seq):
+        if char != '-':
+            count += 1  # Increment for non-gap residues
+            if count in original_indices:
+                aligned_index = i + 1  # Convert to 1-based index
+                # index_mapping[count] = aligned_index
+                index_mapping += [aligned_index]
+    return index_mapping
+
+
 
 # def map_highlight_positions(primary_sequence, aligned_sequence, highlight_positions, verify_aa = True):
 #     """
@@ -548,3 +618,204 @@ def grantham_mds_projection(sequences, aggregate='mean', gap_handling='ignore', 
     dist_matrix = pairwise_grantham_matrix(sequences, aggregate, gap_handling)
     mds = MDS(n_components=n_components, dissimilarity="precomputed", random_state=42)
     return mds.fit_transform(dist_matrix), dist_matrix
+
+
+
+def interpolate_bw(position, known_positions):
+    """
+    Infer the BW numbering of a given residue position based on known BW positions.
+
+    Parameters:
+    - position: Residue position in the sequence (integer).
+    - known_positions: Dictionary of known BW positions {residue index (str): BW number (str)}.
+
+    Returns:
+    - Interpolated BW number (float).
+    """
+    # Convert residue positions to integers and BW numbers to floats
+    # known_positions = {int(k[1:]): float(v) for k, v in known_positions.items()}
+
+    # Get sorted residue indices
+    sorted_positions = sorted(known_positions.keys())
+
+    # Find the closest midpoint reference (X.50)
+    closest_idx = min(sorted_positions, key=lambda x: abs(x - position))
+    closest_bw = known_positions[closest_idx]
+
+    # Calculate offset from the closest BW reference
+    residue_offset = position - closest_idx
+    inferred_bw = float(closest_bw) + (residue_offset * 0.01)
+
+    return round(inferred_bw, 2)
+
+def map_residues_to_bw(query_residues, ref_seq_name, alignment, target_seq_name, bw_positions=None):
+    """
+    Maps query residues from the reference sequence to the target sequence and infers BW numbering.
+
+    Parameters:
+    - query_residues: List of residue positions (e.g., ['H104', 'F155']).
+    - ref_seq_name: The name of the reference sequence in the alignment.
+    - alignment: Dictionary of sequence alignments.
+    - target_seq_name: The target sequence name in the alignment.
+    - bw_positions: Dictionary of known BW numbers for the reference sequence.
+
+    Returns:
+    - Dictionary mapping target residues to inferred BW numbers.
+    """
+    
+    if bw_positions is None: 
+        print(f'using default Or51E2 bw_position . . . on {ref_seq_name}')
+        bw_positions = {"N41":'1.50', "D69": '2.50', "R121":'3.50', 
+                       "V149":'4.50', "C178":'45.50', "D209":'5.50', 
+                       "P253":'6.50', "P288":'7.50'}    
+    
+    ref_seq = alignment[ref_seq_name]
+    target_seq = alignment[target_seq_name]
+
+    # Step 1: Convert BW positions to residue indices
+    bw_residue_positions = {int(res[1:]): float(bw) for res, bw in bw_positions.items()}
+
+    # Step 2: Map OBR residues directly using the aligned sequence
+    target_bw_map = {}
+    ref_res_index    = 0  # Track reference sequence index ignoring gaps
+    target_res_index = 0
+    
+    for ref_res in ref_seq:
+        if ref_res == "-":
+            continue  # Skip gaps in reference sequence
+        ref_res_index += 1  # Increment non-gap reference index
+        
+        if target_seq[ref_res_index - 1] != "-": 
+            target_res_index += 1
+
+        for _res in query_residues:
+            # obr_res_num = int(obr_res[1:])  # Extract numeric residue position (e.g., 'H104' → 104)
+            res_num = int(re.sub( r"\D", "", _res))  # Extract numeric residue position (e.g., 'H104' → 104)
+            
+            if ref_res_index == res_num:  # Find the corresponding aligned position
+                target_res = target_seq[ref_res_index - 1]  # Get target residue at the same alignment position
+                
+                if target_res != "-":  # Ignore cases where target sequence has a gap
+                    inferred_bw = interpolate_bw(ref_res_index, bw_residue_positions)
+                    target_bw_map[f"{target_res}{target_res_index}"] = inferred_bw
+
+    return target_bw_map
+
+def update_bw_positions(ref_seq_name, alignment, bw_positions):
+    """
+    Updates BW numbering to be applicable to all sequences based on the alignment.
+
+    Parameters:
+    - ref_seq_name: The reference sequence name in the alignment.
+    - alignment: Dictionary of sequence alignments {seq_name: sequence}.
+    - bw_positions: Dictionary of known BW numbers for the reference sequence.
+
+    Returns:
+    - Dictionary {aligned residue index: BW number}, valid for all sequences.
+    """
+
+    ref_seq = alignment[ref_seq_name]
+    
+    # Convert BW positions to numeric residue indices
+    bw_residue_positions = {int(re.sub(r"\D", "", res)): float(bw) for res, bw in bw_positions.items()}
+
+    # New mapping of aligned indices to BW numbers
+    updated_bw_positions = {}
+
+    ref_res_index = 0  # Tracks residue position in ref sequence (ignoring gaps)
+    aligned_index = 0  # Tracks residue position in alignment
+
+    # Iterate through the alignment
+    for i, ref_res in enumerate(ref_seq):
+        if ref_res != "-":  
+            ref_res_index += 1  
+        
+        if any(seq[i] != "-" for seq in alignment.values()):  
+            # If any sequence has a residue at this position, count it as an aligned position
+            aligned_index += 1  
+
+        # If this ref_res_index matches a known BW position, update it to aligned_index
+        if ref_res_index in bw_residue_positions:
+            updated_bw_positions[aligned_index] = bw_residue_positions[ref_res_index]  
+
+    return updated_bw_positions
+
+import re
+
+def map_residues_to_bw(residue_list, alignment, target_seq_name, bw_positions):
+    """
+    Maps residue positions in the target sequence to their corresponding BW numbers, using interpolation when necessary.
+
+    Parameters:
+    - residue_list: List of residue positions based on target_seq (e.g., ['H104', 'F155']).
+    - alignment: Dictionary containing aligned sequences {seq_name: sequence}.
+    - target_seq_name: The sequence name for which we are mapping residues.
+    - bw_positions: Dictionary {aligned residue index: BW number}, universal for all sequences.
+
+    Returns:
+    - Dictionary mapping target sequence residues to their BW numbers {residue: BW position}.
+    """
+
+    target_seq = alignment[target_seq_name]
+    
+    # **Preprocess**: Create a mapping of residue numbers to original labels
+    residue_num_to_label = {int(re.sub(r"\D", "", res)): res for res in residue_list}
+
+    target_res_index = 0  # Track actual residue index in target sequence (ignoring gaps)
+    aligned_index = 0  # Track aligned position
+    residue_to_bw = {}
+
+    for i, target_res in enumerate(target_seq):
+        if target_res != "-":
+            target_res_index += 1  # Increment actual residue count
+        
+        if any(seq[i] != "-" for seq in alignment.values()):  
+            aligned_index += 1  # Count as an aligned position if any sequence has a residue here
+
+        # **Check if target_res_index is in the residue list set (O(1) lookup)**
+        if target_res_index in residue_num_to_label:
+            inferred_bw = interpolate_bw(aligned_index, bw_positions)
+            residue_label = re.sub(r"\D", "", residue_num_to_label[target_res_index])
+            # residue_to_bw[residue_label] = inferred_bw  
+            residue_to_bw[f"{target_res}{residue_label}"] = inferred_bw
+    return residue_to_bw
+
+
+
+def compare_bw_numbers(target_bw, query_bw):
+    """
+    Compare BW numbers between a target and a query, identifying overlaps and missing values.
+    Displays output in a table format for better readability.
+
+    Parameters:
+    - target_bw: Dictionary of BW numbers mapped to a target sequence {residue: BW}.
+    - query_bw: Dictionary of BW numbers from the query sequence {residue: BW}.
+    """
+
+    # Convert BW values to sets for easier comparison
+    target_bw_values = {round(v, 2) for v in target_bw.values()}
+    query_bw_values = {round(v, 2) for v in query_bw.values()}
+
+    # Find overlapping BW numbers
+    overlapping_bw_entries = {res: bw for res, bw in target_bw.items() if round(bw, 2) in query_bw_values}
+
+    # Find missing BW entries (present in query but not in target)
+    missing_query_bw_entries = {res: bw for res, bw in query_bw.items() if round(bw, 2) not in target_bw_values}
+
+    # Prepare table data
+    table = []
+    max_len = max(len(target_bw), len(overlapping_bw_entries), len(missing_query_bw_entries))
+
+    target_bw_list = list(target_bw.items())
+    overlapping_bw_list = list(overlapping_bw_entries.items())
+    missing_bw_list = list(missing_query_bw_entries.items())
+
+    for i in range(max_len):
+        target_entry = f"{target_bw_list[i][0]}: {target_bw_list[i][1]}" if i < len(target_bw_list) else ""
+        overlap_entry = f"{overlapping_bw_list[i][0]}: {overlapping_bw_list[i][1]}" if i < len(overlapping_bw_list) else ""
+        missing_entry = f"{missing_bw_list[i][0]}: {missing_bw_list[i][1]}" if i < len(missing_bw_list) else ""
+
+        table.append([target_entry, overlap_entry, missing_entry])
+
+    # Print table
+    print(tabulate(table, headers=["Target BW", "Overlapping BW", "Missing Query BW"]))

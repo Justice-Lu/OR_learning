@@ -68,10 +68,62 @@ def _plotly_fixed_axes_ranges(fig: go.Figure, padding=0, percentage_padding=0.1,
 
     return fig
 
+import numpy as np
+import plotly.graph_objects as go
 
+def plot_coordinates(coordinate_sets, labels=None, colors=None, opacity=0.8, size=5, 
+                     mode='markers'):
+    """
+    Plots one or multiple sets of 3D coordinates in an interactive 3D scatter plot.
+
+    :param coordinate_sets: List of numpy arrays, where each array has shape (N, 3) representing (x, y, z) points.
+    :param labels: Optional list of labels for each coordinate set.
+    :param colors: Optional list of colors corresponding to each coordinate set.
+    :param opacity: Opacity of the markers (default 0.8).
+    :param size: Size of the markers (default 5).
+    """
+    fig = go.Figure()
+    
+    if not isinstance(coordinate_sets, list):
+        coordinate_sets = [coordinate_sets]  # Convert single input into a list
+    
+    num_sets = len(coordinate_sets)
+    
+    if labels is None:
+        labels = [f"Set {i+1}" for i in range(num_sets)]
+    
+    if colors is None:
+        colors = ["blue", "red", "green", "orange", "purple"] * (num_sets // 5 + 1)  # Cycle colors
+    elif type(colors) == dict: 
+        colors = [colors[_key] for _key in colors]
+
+    for i, coords in enumerate(coordinate_sets):
+        coords = np.array(coords)  # Ensure it's a numpy array
+        if coords.shape[1] != 3:
+            raise ValueError(f"Each coordinate set must have shape (N, 3), but got {coords.shape}")
+
+        x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z,
+            mode=mode,
+            name=labels[i],
+            marker=dict(
+                size    = size[i]    if isinstance(size, list)    else size,
+                color   = colors[i]  if isinstance(colors, list)  else colors,
+                opacity = opacity[i] if isinstance(opacity, list) else opacity
+            )
+        ))
+
+    # Set layout
+    fig = _plotly_blank_style(fig)
+
+    return fig
+    
 def visualize_voxel_grid(voxel_data, 
                          coordinate_labels, 
                          color_map, 
+                         size=5,
                          opacity=0.1,
                          highlight_labels=None, 
                          highlight_opacity=0.5):
@@ -107,7 +159,7 @@ def visualize_voxel_grid(voxel_data,
             mode='markers',
             name=label,
             marker=dict(
-                size=5,
+                size=size[i] if isinstance(size, list) else size,
                 color=color_map.get(label, 'gray'),  # Default color is gray if label is not in the color_map
                 opacity= highlight_opacity if highlight_labels and label in highlight_labels else opacity
             )

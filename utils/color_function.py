@@ -80,7 +80,7 @@ def get_continuous_colors(values, colormap="RdBu_r", midpoint=None):
 
     return colors
 
-def distinct_colors(label_list, category='tab10', custom_color=None, random_state=0):
+def distinct_colors(label_list, category='tab10', custom_color=None, random_state=0, form='dict'):
     """
     Generate distinct colors for a list of labels.
 
@@ -141,6 +141,9 @@ def distinct_colors(label_list, category='tab10', custom_color=None, random_stat
     # Assign distinct colors to each label
     for i, label in enumerate(label_list):
         color_dict[label] = color_palette[i]
+    
+    if form == 'list': 
+        return [color_dict[_label] for _label in color_dict]
     
     return color_dict
 
