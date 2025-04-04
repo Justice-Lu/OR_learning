@@ -107,42 +107,91 @@ def structural_alignment_dp(ref_backbone, ref_sequence, tgt_backbone, tgt_sequen
     return aligned_ref, aligned_tgt
 
 
-def generate_sequence_alignment_pairs_fromPDB(reference_pdb, 
-                                              target_pdbs, 
-                                              load_pdb_fn,
-                                              labels=None,  
-                                              gap_penalty=5.0):
+# def generate_sequence_alignment_pairs_fromPDB(reference_pdb, 
+#                                               target_pdbs, 
+#                                               load_pdb_fn,
+#                                               labels=None,  
+#                                               gap_penalty=5.0):
+#     """
+#     Generates a Chimera-like sequence alignment based on structural alignment of proteins.
+
+#     Parameters:
+#         reference_pdb (str): File path to the reference PDB structure.
+#         target_pdbs (list): List of file paths to the target PDB structures.
+#         load_pdb_fn (function): Function to load PDB files. Should return (header, backbone_coords, sequence).
+#         residue_cutoff (float): Cutoff distance used as the gap penalty during structural alignment.
+
+#     Returns:
+#         dict: A dictionary where keys are PDB filenames and values are the aligned sequences.
+#     """
+    
+#     _, ref_backbone, ref_sequence = load_pdb_fn(reference_pdb)
+#     # ref_basename = os.path.basename(reference_pdb).split('_')[0]
+#     # alignment = {ref_basename: ref_sequence}
+#     alignment = {}
+    
+#     for i, target_pdb in enumerate(target_pdbs):
+#         # if target_pdb == reference_pdb:
+#         #     continue
+#         _, tgt_backbone, tgt_sequence = load_pdb_fn(target_pdb)
+#         aligned_ref, aligned_tgt = structural_alignment_dp(
+#             ref_backbone, ref_sequence, tgt_backbone, tgt_sequence, gap_penalty
+#         )
+#         if labels: 
+#             tgt_basename = labels[i]
+#         else: 
+#             tgt_basename = os.path.basename(target_pdb).split('_')[0]
+#         alignment[tgt_basename] = (aligned_ref, aligned_tgt)
+
+#     return alignment
+
+
+def generate_sequence_alignment_pairs(reference, targets, load_pdb_fn=None, labels=None, gap_penalty=5.0):
     """
     Generates a Chimera-like sequence alignment based on structural alignment of proteins.
 
     Parameters:
-        reference_pdb (str): File path to the reference PDB structure.
-        target_pdbs (list): List of file paths to the target PDB structures.
-        load_pdb_fn (function): Function to load PDB files. Should return (header, backbone_coords, sequence).
-        residue_cutoff (float): Cutoff distance used as the gap penalty during structural alignment.
+        reference (str or tuple): PDB file path or a tuple (atom_coords, backbone_coords, sequence).
+        targets (list): List of PDB file paths or tuples [(atom_coords, backbone_coords, sequence), ...].
+        load_pdb_fn (function, optional): Function to load PDB files. Should return (atom_coords, backbone_coords, sequence).
+        labels (list, optional): Custom labels for target sequences.
+        gap_penalty (float): Gap penalty used during structural alignment.
 
     Returns:
-        dict: A dictionary where keys are PDB filenames and values are the aligned sequences.
+        dict: A dictionary where keys are structure labels and values are aligned sequences.
     """
     
-    _, ref_backbone, ref_sequence = load_pdb_fn(reference_pdb)
-    # ref_basename = os.path.basename(reference_pdb).split('_')[0]
-    # alignment = {ref_basename: ref_sequence}
+    # Determine if reference is a file path or preloaded coordinates
+    if isinstance(reference, str):
+        if not load_pdb_fn:
+            raise ValueError("load_pdb_fn is required when providing file paths.")
+        _, ref_backbone, ref_sequence = load_pdb_fn(reference)
+    else:
+        _, ref_backbone, ref_sequence = reference
+    
     alignment = {}
     
-    for i, target_pdb in enumerate(target_pdbs):
-        # if target_pdb == reference_pdb:
-        #     continue
-        _, tgt_backbone, tgt_sequence = load_pdb_fn(target_pdb)
+    for i, target in enumerate(targets):
+        if isinstance(target, str):
+            if not load_pdb_fn:
+                raise ValueError("load_pdb_fn is required when providing file paths.")
+            _, tgt_backbone, tgt_sequence = load_pdb_fn(target)
+        else:
+            _, tgt_backbone, tgt_sequence = target
+        
         aligned_ref, aligned_tgt = structural_alignment_dp(
             ref_backbone, ref_sequence, tgt_backbone, tgt_sequence, gap_penalty
         )
-        if labels: 
+        
+        if labels:
             tgt_basename = labels[i]
-        else: 
-            tgt_basename = os.path.basename(target_pdb).split('_')[0]
+        elif isinstance(target, str):
+            tgt_basename = os.path.basename(target).split('_')[0]
+        else:
+            tgt_basename = f"target_{i}"
+        
         alignment[tgt_basename] = (aligned_ref, aligned_tgt)
-
+    
     return alignment
 
 

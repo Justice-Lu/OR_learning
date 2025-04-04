@@ -84,37 +84,43 @@ AA_THREE_TO_ONE = {
 #     else:
 #         return np.array(coords), np.array(backbone), sequence
     
-def read_pdb(pdb_file):
+def read_pdb(pdb_file, chain_id=None, include_ligands=True):
     """
     Reads a PDB file and extracts atom information while ensuring strict PDB format adherence.
-    
+    Optionally filters atoms by a specific chain ID and includes/excludes ligands (HETATM lines).
+
     :param pdb_file: Path to the PDB file.
+    :param chain_id: Specific chain ID to extract (default: None, keeps all chains).
+    :param include_ligands: Boolean flag to include ligands (HETATM) or not (default: True).
     :return: List of atom dictionaries containing parsed PDB information.
     """
     atoms = []
     with open(pdb_file, 'r') as file:
         for line in file:
-            if line.startswith("ATOM") or line.startswith("HETATM"):
+            if line.startswith("ATOM") or (include_ligands and line.startswith("HETATM")):
                 try:
-                    atom = {
-                        "serial": int(line[6:11]),
-                        "name": line[12:16].strip(),
-                        "alt_loc": line[16:17],
-                        "res_name": line[17:20].strip(),
-                        "chain": line[21:22],
-                        "res_num": int(line[22:26]),
-                        "x": float(line[30:38]),
-                        "y": float(line[38:46]),
-                        "z": float(line[46:54]),
-                        "occupancy": float(line[54:60]),
-                        "temp_factor": float(line[60:66]),
-                        "element": line[76:78].strip(),
-                        "charge": line[78:80].strip()
-                    }
-                    atoms.append(atom)
+                    chain = line[21:22]
+                    if chain_id is None or chain in chain_id:
+                        atom = {
+                            "serial": int(line[6:11]),
+                            "name": line[12:16].strip(),
+                            "alt_loc": line[16:17],
+                            "res_name": line[17:20].strip(),
+                            "chain": chain,
+                            "res_num": int(line[22:26]),
+                            "x": float(line[30:38]),
+                            "y": float(line[38:46]),
+                            "z": float(line[46:54]),
+                            "occupancy": float(line[54:60]),
+                            "temp_factor": float(line[60:66]),
+                            "element": line[76:78].strip(),
+                            "charge": line[78:80].strip()
+                        }
+                        atoms.append(atom)
                 except ValueError:
                     print(f"Warning: Could not parse line: {line.strip()}")
     return atoms
+
 
 def write_pdb(atoms, output_pdb):
     """
@@ -125,41 +131,54 @@ def write_pdb(atoms, output_pdb):
     """
     with open(output_pdb, 'w') as file_out:
         for atom in atoms:
+            head = 'ATOM' if atom['res_name'] in AA_THREE_TO_ONE.keys() else 'HETATM'
+            
             file_out.write(
-                f"ATOM  {atom['serial']:5d}  {atom['name']:<3}{atom['alt_loc']}{atom['res_name']:>3} {atom['chain']}"
+                f"{head:<6}{atom['serial']:5d}  {atom['name']:<3}{atom['alt_loc']}{atom['res_name']:>3} {atom['chain']}"
                 f"{atom['res_num']:4d}    {atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}"
                 f"{atom['occupancy']:6.2f}{atom['temp_factor']:6.2f}          {atom['element']:>2}{atom['charge']:>2}\n"
             )
 
-def load_pdb_coordinates(pdb_file, single_aa_name=True):
+
+def load_pdb_coordinates(pdb_file, single_aa_name=True, chain_id=None, keep_ligand=False):
     """
-    Extracts atomic coordinates and converts amino acid sequence to single-letter notation.
-    
+    Extracts atomic coordinates, separates ligand coordinates, and converts amino acid sequence to single-letter notation.
+
     :param pdb_file: Path to the PDB file.
     :param single_aa_name: Whether to return the sequence in single-letter notation.
-    :return: A tuple of (coordinates, backbone coordinates, sequence).
+    :param chain_id: Specific chain ID to extract (default: None, keeps all chains).
+    :param keep_ligand: Whether to separate ligand coordinates from the main protein structure.
+    :return: A tuple of (coordinates, backbone coordinates, sequence, ligand coordinates if keep_ligands=True).
     """
-    atoms = read_pdb(pdb_file)
+    atoms = read_pdb(pdb_file, chain_id=chain_id, include_ligands=keep_ligand)
     coords = []
     backbone = []
     sequence = []
-    
+    ligands = []
+
     for atom in atoms:
         x, y, z = atom['x'], atom['y'], atom['z']
-        coords.append([x, y, z])
         
-        if atom['name'] == 'CA':  # Select alpha-carbon atoms
-            backbone.append([x, y, z])
-            res_name = atom['res_name']
+        if atom['res_name'] in AA_THREE_TO_ONE.keys():  # Check if it's a standard amino acid
+            coords.append([x, y, z])
             
-            if single_aa_name:
-                single_letter = AA_THREE_TO_ONE.get(res_name, "X")  # Use "X" for unknown residues
-                sequence.append(single_letter)
-            else:
-                sequence.append((res_name, atom['res_num']))  # Store aa and residue number
+            if atom['name'] == 'CA':  # Select alpha-carbon atoms
+                backbone.append([x, y, z])
+                res_name = atom['res_name']
+                
+                if single_aa_name:
+                    single_letter = AA_THREE_TO_ONE.get(res_name, "X")  # Use "X" for unknown residues
+                    sequence.append(single_letter)
+                else:
+                    sequence.append((res_name, atom['res_num']))  # Store aa and residue number
+        else:
+            ligands.append([x, y, z])  # Store ligand coordinates separately
     
     if single_aa_name:
-        return np.array(coords), np.array(backbone), "".join(sequence)
+        sequence = "".join(sequence)
+
+    if keep_ligand:
+        return np.array(coords), np.array(backbone), sequence, np.array(ligands)
     else:
         return np.array(coords), np.array(backbone), sequence
 
@@ -181,7 +200,7 @@ def tmalign_pdb(ref_pdb, target_pdb,
         assert output_pdb is not None, "Please provide output_pdb if saving pdb"
     
     coords1, backbone1, seq1 = load_pdb_coordinates(ref_pdb)
-    coords2, backbone2, seq2 = load_pdb_coordinates(target_pdb)
+    coords2, backbone2, seq2, ligand = load_pdb_coordinates(target_pdb, keep_ligand=True)
     
     ref_atoms = backbone1 if align_with == 'backbone' else coords1
     tgt_atoms = backbone2 if align_with == 'backbone' else coords2
@@ -194,10 +213,18 @@ def tmalign_pdb(ref_pdb, target_pdb,
     
     aligned_result = tm_align(ref_atoms_centered, tgt_atoms_centered, seq1, seq2)
     transformed_coords = np.dot(coords2 - centroid_tgt, aligned_result.u) + centroid_ref
-
-    atoms = read_pdb(target_pdb)
+    
+    if len(ligand) > 0: 
+        transformed_ligand = np.dot(ligand - centroid_tgt, aligned_result.u) + centroid_ref
+        atoms = read_pdb(target_pdb, include_ligands=True)
+    else:  
+        atoms = read_pdb(target_pdb, include_ligands=False)
+    # return transformed_coords, atoms # FOR DEBUGGING
     for i, atom in enumerate(atoms):
-        atom['x'], atom['y'], atom['z'] = transformed_coords[i]
+        if i < len(transformed_coords): 
+            atom['x'], atom['y'], atom['z'] = transformed_coords[i]
+        else: 
+            atom['x'], atom['y'], atom['z'] = transformed_ligand[i-len(transformed_coords)]
         
     if save_pdb:
         write_pdb(atoms, output_pdb)
@@ -212,12 +239,16 @@ def tmalign_pdb(ref_pdb, target_pdb,
 align_and_save = tmalign_pdb
 
     
-def fix_pdb_format(input_pdb, output_pdb=None):
+def fix_pdb_format(input_pdb, output_pdb=None, chain_id=None, keep_ligand=True):
     """
     Fixes the formatting of a PDB file to adhere strictly to PDB format specifications.
-    
+    First attempts direct line parsing; if it fails, falls back to part-based parsing.
+    Allows filtering by chain ID and optional separation of ligands.
+
     :param input_pdb: Path to the input PDB file (old format with inconsistent spacing).
     :param output_pdb: Path to save the fixed PDB file. If None, overwrites the input file.
+    :param chain_id: Specific chain ID to keep (default: None, keeps all chains).
+    :param keep_ligands: Whether to include ligand entries in the output PDB.
     """
     if output_pdb is None:
         output_pdb = input_pdb  # Overwrite the original file if no output path is provided
@@ -228,58 +259,170 @@ def fix_pdb_format(input_pdb, output_pdb=None):
         for line in file_in:
             if line.startswith(("ATOM", "HETATM")):
                 try:
-                    # Split line based on spaces while preserving important spacing
-                    parts = line.split()
-                    
-                    serial = int(parts[1])  
-                    name = parts[2]  
-                    if len(parts[3]) == 1:  # Detect if there's an altLoc indicator
-                        alt_loc = parts[3]
-                        res_name = parts[4]
-                        chain = parts[5]
-                        res_num = int(parts[6])
-                        x = float(parts[7])
-                        y = float(parts[8])
-                        z = float(parts[9])
-                        occupancy = float(parts[10]) if len(parts) > 10 else 1.00
-                        temp_factor = float(parts[11]) if len(parts) > 11 else 0.00
-                        element = parts[12] if len(parts) > 12 else "  "
-                        charge = parts[13] if len(parts) > 13 else "  "
-                    else:  
-                        alt_loc = " "  # No alternate location indicator
-                        res_name = parts[3]
-                        chain = parts[4]
-                        res_num = int(parts[5])
-                        x = float(parts[6])
-                        y = float(parts[7])
-                        z = float(parts[8])
-                        occupancy = float(parts[9]) if len(parts) > 9 else 1.00
-                        temp_factor = float(parts[10]) if len(parts) > 10 else 0.00
-                        element = parts[11] if len(parts) > 11 else "  "
-                        charge = parts[12] if len(parts) > 12 else "  "
+                    # Attempt direct parsing using fixed positions
+                    serial = int(line[6:11].strip())
+                    name = line[12:16].strip()
+                    alt_loc = line[16:17]
+                    res_name = line[17:20].strip()
+                    chain = line[21:22]
+                    res_num = int(line[22:26].strip())
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    occupancy = float(line[54:60].strip()) if line[54:60].strip() else 1.00
+                    temp_factor = float(line[60:66].strip()) if line[60:66].strip() else 0.00
+                    element = line[76:78].strip() if len(line) > 76 else "  "
+                    charge = line[78:80].strip() if len(line) > 78 else "  "
 
-                    # Format the line properly following strict PDB specifications
-                    fixed_line = (
-                        f"{line[:6]}{serial:5d}  {name:<3}{alt_loc}{res_name:>3} {chain}"
-                        f"{res_num:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
-                        f"{occupancy:6.2f}{temp_factor:6.2f}          {element:>2}{charge:>2}\n"
-                    )
-                    fixed_lines.append(fixed_line)
+                except ValueError:
+                    # If direct parsing fails, attempt dynamic parsing
+                    try:
+                        parts = line.split()
+                        serial = int(parts[1])  
+                        name = parts[2]  
+                        if len(parts[3]) == 1:  # Detect if there's an altLoc indicator
+                            alt_loc = parts[3]
+                            res_name = parts[4]
+                            chain = parts[5]
+                            res_num = int(parts[6])
+                            x = float(parts[7])
+                            y = float(parts[8])
+                            z = float(parts[9])
+                            occupancy = float(parts[10]) if len(parts) > 10 else 1.00
+                            temp_factor = float(parts[11]) if len(parts) > 11 else 0.00
+                            element = parts[12] if len(parts) > 12 else "  "
+                            charge = parts[13] if len(parts) > 13 else "  "
+                        else:  
+                            alt_loc = " "  # No alternate location indicator
+                            res_name = parts[3]
+                            chain = parts[4]
+                            res_num = int(parts[5])
+                            x = float(parts[6])
+                            y = float(parts[7])
+                            z = float(parts[8])
+                            occupancy = float(parts[9]) if len(parts) > 9 else 1.00
+                            temp_factor = float(parts[10]) if len(parts) > 10 else 0.00
+                            element = parts[11] if len(parts) > 11 else "  "
+                            charge = parts[12] if len(parts) > 12 else "  "
 
-                except (ValueError, IndexError):
-                    print(f"Skipping malformed line: {line.strip()}")
-                    fixed_lines.append(line)  # Preserve malformed lines for debugging
+                    except (ValueError, IndexError):
+                        # If both methods fail, skip the line
+                        print(f"Warning: Could not parse line, skipping: {line.strip()}")
+                        fixed_lines.append(line)  # Preserve for debugging
+                        continue  
+
+                # Apply chain and ligand filtering
+                if chain_id is not None and chain not in chain_id:
+                    continue
+                if not keep_ligand and res_name not in AA_THREE_TO_ONE.keys():
+                    continue
+
+                # Format the line properly following strict PDB specifications
+                fixed_line = (
+                    f"{line[:6]}{serial:5d}  {name:<3}{alt_loc}{res_name:>3} {chain}"
+                    f"{res_num:4d}    {x:8.3f}{y:8.3f}{z:8.3f}"
+                    f"{occupancy:6.2f}{temp_factor:6.2f}          {element:>2}{charge:>2}\n"
+                )
+                fixed_lines.append(fixed_line)
+
             else:
-                fixed_lines.append(line)  # Preserve non-ATOM lines
+                fixed_lines.append(line)  # Preserve non-ATOM/HETATM lines
 
     # Save the fixed PDB file
     with open(output_pdb, 'w') as file_out:
         file_out.writelines(fixed_lines)
     
     print(f"Fixed PDB saved to: {output_pdb}")
+
+
+def filter_cif_by_chain(input_file, output_file, chain_id='A', use_auth_chain=True):
+    """
+    Filter a .cif file to keep only atoms from a specific chain while preserving metadata.
     
-    
-def cif_to_pdb(cif_file, pdb_out_path):
+    Args:
+        input_file (str): Path to input .cif file
+        output_file (str): Path to output .cif file
+        chain_id (str): Chain identifier to keep (default: 'A')
+        use_auth_chain (bool): If True, filter by auth_asym_id, otherwise by label_asym_id
+    """
+    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+        lines = infile.readlines()
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Check if starting the atom_site loop
+            if line == "loop_":
+                # Check if the next line starts an atom site section
+                if i+1 < len(lines) and (lines[i+1].strip() == "_atom_site.group_PDB" or 
+                                          lines[i+1].strip().startswith("_atom_site.")):
+                    # We're in the atom section
+                    outfile.write(lines[i])  # Write the "loop_" line
+                    i += 1
+                    
+                    # Read and store all header lines
+                    header_lines = []
+                    column_indices = {}
+                    header_idx = 0
+                    
+                    while i < len(lines) and lines[i].strip().startswith("_atom_site."):
+                        header_line = lines[i].strip()
+                        header_lines.append(lines[i])
+                        column_indices[header_idx] = header_line
+                        header_idx += 1
+                        i += 1
+                    
+                    # Find the index of the chain ID columns
+                    chain_col_idx = None
+                    auth_chain_col_idx = None
+                    
+                    for idx, col_name in column_indices.items():
+                        if "_atom_site.label_asym_id" in col_name:
+                            chain_col_idx = idx
+                        elif "_atom_site.auth_asym_id" in col_name:
+                            auth_chain_col_idx = idx
+                    
+                    # Write all header lines to output
+                    for header in header_lines:
+                        outfile.write(header)
+                    
+                    # Now process atom lines
+                    while i < len(lines) and not (lines[i].strip() == "" or 
+                                                 lines[i].strip().startswith("#") or 
+                                                 lines[i].strip().startswith("loop_")):
+                        # Split the line into columns
+                        columns = lines[i].split()
+                        
+                        if len(columns) >= max(chain_col_idx or 0, auth_chain_col_idx or 0) + 1:
+                            # Determine which chain ID to use for filtering
+                            if use_auth_chain and auth_chain_col_idx is not None:
+                                current_chain = columns[auth_chain_col_idx]
+                            elif chain_col_idx is not None:
+                                current_chain = columns[chain_col_idx]
+                            else:
+                                # If can't determine chain, write the line anyway
+                                outfile.write(lines[i])
+                                i += 1
+                                continue
+                            
+                            # Write the line if it matches the requested chain
+                            if current_chain in chain_id:
+                                outfile.write(lines[i])
+                        else:
+                            # Line doesn't have enough columns, write it anyway (might be a comment)
+                            outfile.write(lines[i])
+                        i += 1
+                else:
+                    # Not the atom section, just write the line
+                    outfile.write(lines[i])
+                    i += 1
+            else:
+                # Not in atom section, write the line
+                outfile.write(lines[i])
+                i += 1
+
+def cif_to_pdb(cif_file, pdb_out_path, remove_H = True):
     """
     Converts a CIF file to a properly formatted PDB file.
 
@@ -290,15 +433,15 @@ def cif_to_pdb(cif_file, pdb_out_path):
 
     with open(cif_file, 'r') as file:
         for line in file:
-            if line.startswith("ATOM"):
+            if line.startswith(("ATOM", "HETATM")):
                 parts = line.split()                
                 atom = {
                         "serial": int(parts[1]),
                         "name": parts[3],
                         "alt_loc": " ",
-                        "res_name": parts[5],
+                        "res_name": parts[5][0:3],
                         "chain": parts[6],
-                        "res_num": int(parts[8]),
+                        "res_num": int(parts[8]) if str(parts[8]).isdigit() else 999, # Hard code ligands as residue 999 
                         "x": float(parts[10]),
                         "y": float(parts[11]),
                         "z": float(parts[12]),
@@ -308,6 +451,12 @@ def cif_to_pdb(cif_file, pdb_out_path):
                         "charge": " "  # No charge information in CIF
                     }
                 
+                # Skip hydrogen atoms if remove_H is True
+                if remove_H and atom["element"] == "H":
+                    continue
+                
+                # If the atom is a ligand, then assign chain as 'A'
+                atom["chain"] = 'A' if atom["res_num"] == 999 else atom["chain"]
                 
                 # Use the existing write_pdb function
                 atoms.append(atom)

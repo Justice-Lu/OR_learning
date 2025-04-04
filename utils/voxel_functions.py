@@ -222,18 +222,24 @@ ATOM_ENCODING = {'C': [1, 0, 0, 0],
 def _res_coord_voxel_prep(res_data): 
     """
     Translates residue coordinates into a list of coordinates and their corresponding residue classes.
-    
+
+    This function is designed for classifying residue properties based on their chemical characteristics.
+    Amino acid classification starts at index **1** because index 0 is reserved to indicate whether a position 
+    represents a cavity space (1) or not (0). If the value is 0, the position may correspond to an amino acid 
+    or an unoccupied space.
+
     Each residue is assigned to one of the following classes:
-    - Alipathic apolar (class 2): Alanine, Glycine, Isoleucine, Leucine, Methionine, Valine
-    - Aromatic (class 3): Phenylalanine, Tryptophan, Tyrosine
-    - Polar uncharged (class 4): Asparagine, Cysteine, Glutamine, Proline, Serine, Threonine
-    - Negatively charged (class 5): Aspartate, Glutamate
-    - Positively charged (class 6): Arginine, Histidine, Lysine
-    - Non-standard (class 7): Non-standard residues
+    - Cavity space (index 0): Indicates the presence of a cavity (binary flag at index 0)
+    - Aliphatic apolar (index 1): Alanine, Glycine, Isoleucine, Leucine, Methionine, Valine
+    - Aromatic (index 2): Phenylalanine, Tryptophan, Tyrosine
+    - Polar uncharged (index 3): Asparagine, Cysteine, Glutamine, Proline, Serine, Threonine
+    - Negatively charged (index 4): Aspartate, Glutamate
+    - Positively charged (index 5): Arginine, Histidine, Lysine
+    - Non-standard (index 6): Non-standard residues
     
     Parameters:
     -----------
-    data : list
+    res_data : list
         A list of lists, where each sublist contains residue information in the format:
         [residue_number, residue_name, atom_name, x, y, z]
     
@@ -241,24 +247,26 @@ def _res_coord_voxel_prep(res_data):
     --------
     list
         A list of lists, where each sublist contains:
-        [x, y, z, [0, 0, 0, 0, 0, 0, 0, 0]] where the 1-based index of the residue class is set to 1.
-    
+        [x, y, z, [0, 0, 0, 0, 0, 0, 0]] where the corresponding index of the residue class is set to 1.
+        The first index (0) indicates cavity presence (1 for cavity, 0 otherwise), while residue classifications
+        start at index 1.
+
     Example:
     --------
     Input:
     [['24', 'GLU', 'OE2', '27.382', '-3.966', '-2.635']]
     
     Output:
-    [[27.382, -3.966, -2.635, [0, 0, 0, 0, 1, 0, 0, 0]]]
+    [[27.382, -3.966, -2.635, [0, 0, 0, 1, 0, 0, 0]]]
     """
     
-    # Define residue classes
-    residue_classes = {'ALA': 2,'GLY': 2,'ILE': 2,'LEU': 2,'MET': 2,'VAL': 2,
-                       'PHE': 3,'TRP': 3,'TYR': 3,
-                       'ASN': 4,'CYS': 4,'GLN': 4,'PRO': 4,'SER': 4,'THR': 4,
-                       'ASP': 5,'GLU': 5,
-                       'ARG': 6,'HIS': 6,'LYS': 6,
-                       'UNK': 7,'NON': 7}
+    # Define residue classes with updated indices
+    residue_classes = {'ALA': 1,'GLY': 1,'ILE': 1,'LEU': 1,'MET': 1,'VAL': 1,
+                       'PHE': 2,'TRP': 2,'TYR': 2,
+                       'ASN': 3,'CYS': 3,'GLN': 3,'PRO': 3,'SER': 3,'THR': 3,
+                       'ASP': 4,'GLU': 4,
+                       'ARG': 5,'HIS': 5,'LYS': 5,
+                       'UNK': 6,'NON': 6}
 
     translated_data = []
     for _olfr in res_data:
@@ -266,91 +274,262 @@ def _res_coord_voxel_prep(res_data):
         for _res in _olfr: 
             x, y, z = map(float, _res[3:6])  # Extract coordinates and convert to float
             residue = _res[1]  # Extract residue name
-            cls = residue_classes.get(residue, 7)  # Default to class 7 if residue not found
-            class_vector = [0] * 8  # Initialize all-zero vector
+            cls = residue_classes.get(residue, 6)  # Default to class 6 if residue not found
+            class_vector = [0] * 7  # Initialize all-zero vector
             class_vector[cls] = 1  # Set appropriate class index to 1
             _olfr_res.append([x, y, z, class_vector])  # Append the result
         translated_data.append(_olfr_res)
     return translated_data
 
-def voxelize_cavity(cavity_coords, 
-                    residue_coords=None, 
-                    resolution=1):
+
+# Categorize amino acids by key binding-relevant properties
+AA_PROPERTIES = {
+    # Hydrophobicity (crucial for binding interactions)
+    'hydrophobicity': {
+        'very_hydrophobic': ['LEU', 'ILE', 'VAL', 'MET', 'PHE', 'TRP'],
+        'hydrophobic': ['ALA', 'PRO', 'CYS'],
+        'neutral': ['THR', 'SER', 'GLY'],
+        'hydrophilic': ['ASP', 'GLU', 'LYS', 'ARG', 'HIS']
+    },
+    
+    # Charge (important for electrostatic interactions)
+    'charge': {
+        'positive': ['LYS', 'ARG', 'HIS'],
+        'negative': ['ASP', 'GLU'],
+        'neutral': ['ALL_OTHER']
+    },
+    
+    # H-bond capability (critical for specific interactions)
+    'h_bond': {
+        'donor': ['SER', 'THR', 'TYR', 'LYS', 'ARG', 'HIS', 'TRP', 'ASN', 'GLN'],
+        'acceptor': ['ASP', 'GLU', 'ASN', 'GLN'],
+        'both': ['SER', 'THR', 'TYR'],
+        'none': ['ALA', 'LEU', 'ILE', 'VAL', 'PRO', 'PHE', 'MET']
+    },
+    
+    # Aromaticity (important for π-π and cation-π interactions)
+    'aromaticity': {
+        'aromatic': ['PHE', 'TYR', 'TRP', 'HIS'],
+        'non_aromatic': ['ALL_OTHER']
+    },
+    
+    # Size and flexibility (affects binding pocket interactions)
+    'size_flexibility': {
+        'small_rigid': ['ALA', 'GLY', 'PRO'],
+        'small_flexible': ['SER', 'THR', 'CYS'],
+        'medium_flexible': ['ASN', 'GLN', 'ASP', 'GLU'],
+        'large_flexible': ['LYS', 'ARG', 'MET'],
+        'large_hydrophobic': ['LEU', 'ILE', 'VAL', 'PHE', 'TRP']
+    }
+}
+
+# Reverse mapping for efficient lookups
+def create_reverse_property_mapping(property_dict):
+    """
+    Create a reverse mapping for efficient property lookups
+    """
+    reverse_map = {}
+    for prop, amino_acids in property_dict.items():
+        for aa_list in amino_acids.values():
+            for aa in aa_list:
+                if aa != 'ALL_OTHER':
+                    if aa not in reverse_map:
+                        reverse_map[aa] = {}
+                    reverse_map[aa][prop] = list(amino_acids.keys())[list(amino_acids.values()).index(aa_list)]
+    return reverse_map
+
+# Create lookup dictionary
+AA_PROPERTY_LOOKUP = create_reverse_property_mapping(AA_PROPERTIES)
+
+def one_hot_encode_aa_properties(residue):
+    """
+    One-hot encode amino acid properties relevant to ligand binding
+    
+    Parameters:
+    -----------
+    residue : str
+        Three-letter amino acid code
+    
+    Returns:
+    --------
+    list
+        One-hot encoded vector of binding-relevant properties
+    """
+    # Default to all zeros if residue not found
+    encoding = np.zeros(20, dtype=int)
+    
+    # If residue not in lookup, return zero vector
+    if residue not in AA_PROPERTY_LOOKUP:
+        return encoding.tolist()
+    
+    # Get properties for this residue
+    props = AA_PROPERTY_LOOKUP[residue]
+    
+    # Encode hydrophobicity
+    hydro_map = {'very_hydrophobic': 0, 'hydrophobic': 1, 'neutral': 2, 'hydrophilic': 3}
+    encoding[hydro_map.get(props.get('hydrophobicity', 'neutral'), 2)] = 1
+    
+    # Encode charge
+    charge_map = {'positive': 4, 'negative': 5, 'neutral': 6}
+    encoding[charge_map.get(props.get('charge', 'neutral'), 6)] = 1
+    
+    # Encode H-bond capability
+    h_bond_map = {'donor': 7, 'acceptor': 8, 'both': 9, 'none': 10}
+    encoding[h_bond_map.get(props.get('h_bond', 'none'), 10)] = 1
+    
+    # Encode aromaticity
+    arom_map = {'aromatic': 11, 'non_aromatic': 12}
+    encoding[arom_map.get(props.get('aromaticity', 'non_aromatic'), 12)] = 1
+    
+    # Encode size and flexibility
+    size_flex_map = {
+        'small_rigid': 13, 'small_flexible': 14, 
+        'medium_flexible': 15, 'large_flexible': 16, 
+        'large_hydrophobic': 17
+    }
+    encoding[size_flex_map.get(props.get('size_flexibility', 'small_rigid'), 13)] = 1
+    
+    # Add two additional features for special cases
+    encoding[18] = 1 if residue in ['CYS'] else 0  # Special sulfur-containing
+    encoding[19] = 1 if residue in ['PRO'] else 0  # Unique cyclic structure
+    
+    return encoding.tolist()
+
+def encode_residues_for_voxel(res_data):
+    """
+    Translates residue coordinates into a list of coordinates and their 
+    one-hot encoded property vectors.
+    
+    Parameters:
+    -----------
+    res_data : list
+        A list of lists, where each sublist contains residue information in the format:
+        [residue_number, residue_name, atom_name, x, y, z]
+    
+    Returns:
+    --------
+    list
+        A list of lists, where each sublist contains:
+        [x, y, z, one_hot_encoded_vector]
+    """
+    translated_data = []
+    for _olfr in res_data:
+        _olfr_res = []
+        for _res in _olfr:
+            x, y, z = map(float, _res[3:6])  # Extract coordinates and convert to float
+            residue = _res[1]  # Extract residue name
+            
+            # Create property vector
+            property_vector = [0]  # Cavity flag
+            property_vector.extend(one_hot_encode_aa_properties(residue))
+            
+            _olfr_res.append([x, y, z, property_vector])  # Append the result
+        translated_data.append(_olfr_res)
+    
+    return translated_data
+
+def voxelize_cavity(
+    cavity_coords=None, 
+    residue_coords=None, 
+    resolution=1, 
+    encode_method='aa_properties'
+):
     """
     Voxelizes 3D coordinates by creating a voxel grid representation.
-    If residue_coords are provided, each voxel will store an 8-element one-hot encoded array.
-    If residue_coords are not provided, each voxel will store a single value: 0 (empty) or 1 (occupied).
     
-    :param cavity_coords: 
-        List of lists containing 3D coordinates for cavities.
-        Example: 
-        [
-            [array([x1, y1, z1]), array([x2, y2, z2])],
-            [array([x3, y3, z3]), array([x4, y4, z4])]
-        ]
+    Parameters:
+    -----------
+    cavity_coords : dict or list, optional
+        3D coordinates for cavities
+    residue_coords : dict or list, optional
+        Residue interaction data
+    resolution : float, default 1
+        Size of each voxel
+    encode_method : str, default 'aa_properties'
+        Method of encoding residue properties
     
-    :param residue_coords: 
-        List of lists containing residue interaction data with one-hot encoded classes.
-        Each residue coordinate must be in the form:
-        [residue_number, residue_name, atom_name, x, y, z].
-        Example:
-        [['24', 'GLU', 'OE2', '27.382', '-3.966', '-2.635']]
-
-        Default is None. If None, voxel grid will store a single value at each position.
-
-    :param resolution: 
-        Size of each voxel (default is 1).
-        Determines the granularity of the voxel grid.
-    
-    :return: 
-        - List of voxel grids for each cavity. 
-          Each grid is a numpy array of shape X x Y x Z x N, where N = 8 (if residue_coords is supplied)
-          or N = 1 (if residue_coords is None).
-        - Tuple of the grid shape (X, Y, Z).
+    Returns:
+    --------
+    tuple: 
+        - List of voxel grids
+        - Tuple of grid shape (X, Y, Z)
     """
-    # Handle residue coordinate preparation if supplied
-    residue_coords_class = _res_coord_voxel_prep(residue_coords) if residue_coords else None
 
-    # Gather all coordinates (cavity and residue) for defining grid boundaries
-    all_coords = list(np.concatenate(cavity_coords, axis=0))
-    if residue_coords_class:
-        all_coords.extend([_coord[:3] for _all_coord in residue_coords_class for _coord in _all_coord])
+    # Convert dict to list if necessary
+    cavity_coords = list(cavity_coords.values()) if isinstance(cavity_coords, dict) else (cavity_coords or [])
+    residue_coords = list(residue_coords.values()) if isinstance(residue_coords, dict) else (residue_coords or [])
+
+    # Prepare residue coordinates based on encoding method
+    if encode_method == 'aa_properties': 
+        residue_coords_class = encode_residues_for_voxel(residue_coords) if residue_coords else None
+    else: 
+        residue_coords_class = _res_coord_voxel_prep(residue_coords) if residue_coords else None
+
+    # Collect all coordinates
+    all_coords = []
+    if cavity_coords:
+        all_coords.extend(np.concatenate(cavity_coords, axis=0))
     
+    if residue_coords_class:
+        all_coords.extend(
+            np.array([_coord[:3] for _all_coord in residue_coords_class for _coord in _all_coord])
+        )
+
+    # Handle case with no coordinates
+    if not all_coords:
+        return [], (0, 0, 0)
+
+    # Convert to numpy array for processing
+    all_coords = np.array(all_coords)
+
     # Compute grid boundaries
     min_coords = np.min(all_coords, axis=0)
     max_coords = np.max(all_coords, axis=0)
-    
+
     # Define voxel grid shape
     grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int) + 1
-    
+
+    # Determine vector length dynamically
+    vector_length = len(residue_coords_class[0][0][3])
+
     # Initialize voxelized data
     voxelized_data = []
-    
-    for i, cavity in enumerate(cavity_coords):
-        if residue_coords_class and i < len(residue_coords):
-            # 8-dimensional grid for one-hot encoded data
-            voxel_grid = np.zeros((*grid_shape, 8), dtype=int)
-            coords_data = [[_coord[0], _coord[1], _coord[2], [1, 0, 0, 0, 0, 0, 0, 0]] for _coord in cavity]
-            coords_data.extend(residue_coords_class[i])
-        else:
-            # 1-dimensional grid for binary data
-            voxel_grid = np.zeros((*grid_shape, 1), dtype=int)
-            coords_data = [[_coord[0], _coord[1], _coord[2], [1]] for _coord in cavity]
+
+    # Process cavities and/or residue coordinates
+    num_iterations = max(
+        len(cavity_coords) if cavity_coords else 0, 
+        len(residue_coords_class) if residue_coords_class else 0
+    )
+
+    for i in range(num_iterations):
+        # Initialize voxel grid with dynamic vector length
+        voxel_grid = np.zeros((*grid_shape, vector_length), dtype=int)
+
+        # Collect coordinates for current iteration
+        coords_data = []
         
+        # Add residue coordinates if available
+        if residue_coords_class and i < len(residue_coords_class):
+            coords_data.extend(residue_coords_class[i])
+        
+        # Add cavity coordinates if available
+        if cavity_coords and i < len(cavity_coords):
+            cavity_flag_vector = [1] + [0] * (vector_length - 1)
+            coords_data.extend([
+                [_coord[0], _coord[1], _coord[2], cavity_flag_vector] 
+                for _coord in cavity_coords[i]
+            ])
+
         # Map coordinates to voxel grid
         for point in coords_data:
             grid_x = int((point[0] - min_coords[0]) // resolution)
             grid_y = int((point[1] - min_coords[1]) // resolution)
             grid_z = int((point[2] - min_coords[2]) // resolution)
-            
-            # Update voxel grid with the corresponding value (one-hot or binary)
             voxel_grid[grid_x, grid_y, grid_z] = point[3]
-        
-        # Append the voxel grid for the current cavity
-        voxelized_data.append(voxel_grid)
-    
-    return voxelized_data, grid_shape
 
+        voxelized_data.append(voxel_grid)
+
+    return voxelized_data, grid_shape
 
 def voxelize_coordinates(cavity_coords, resolution=1):
     """
@@ -392,3 +571,116 @@ def voxelize_coordinates(cavity_coords, resolution=1):
     
     return voxelized_data, grid_shape
 
+
+# Convert OHE properties into single integer labels (0-6)
+def convert_properties(voxel_array):
+    """
+    Converts one-hot encoded (OHE) residue properties into a single integer label for each voxel.
+
+    This function translates a voxel grid with one-hot encoded residue classes into a simplified 
+    integer-labeled format. The first index (0) indicates cavity presence, while residue classifications 
+    start at index 1.
+
+    Parameters:
+    -----------
+    voxel_array : numpy.ndarray
+        A 4D numpy array (X, Y, Z, 7), where the last dimension contains one-hot encoded classifications.
+
+    Returns:
+    --------
+    numpy.ndarray
+        A 3D numpy array (X, Y, Z) where each voxel is labeled with an integer (0-6):
+        - 0 → Empty space
+        - 1 → Aliphatic apolar residues
+        - 2 → Aromatic residues
+        - 3 → Polar uncharged residues
+        - 4 → Negatively charged residues
+        - 5 → Positively charged residues
+        - 6 → Non-standard residues
+
+    Example:
+    --------
+    Input:
+    voxel_array[x, y, z] = [0, 0, 0, 1, 0, 0, 0]
+
+    Output:
+    labeled_voxel[x, y, z] = 3
+    """
+    
+    labeled_voxel = np.zeros(voxel_array.shape[:3], dtype=int)  # Initialize empty grid
+
+    for x in range(voxel_array.shape[0]):
+        for y in range(voxel_array.shape[1]):
+            for z in range(voxel_array.shape[2]):
+                properties = voxel_array[x, y, z]  # 7-length OHE
+                if np.any(properties):  
+                    labeled_voxel[x, y, z] = np.argmax(properties)  # Directly use the index
+                else:
+                    labeled_voxel[x, y, z] = -1  # -1 used for empty space (as np.argmax[1,0,0 ...] also denotes to 0)
+
+    return labeled_voxel
+
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+def coords_to_voxel_pca(cavity_coords=None, residue_coords=None, resolution=1, n_components=2):
+    """
+    Processes voxelized cavity data and applies PCA to reduce dimensions.
+
+    Parameters:
+    -----------
+    cavity_coords : dict
+        Dictionary of cavity coordinates.
+    residue_coords : dict
+        Dictionary of residue coordinates.
+    resolution : int, optional
+        Resolution for voxelization (default is 1).
+    n_components : int, optional
+        Number of PCA components to retain (default is 2).
+
+    Returns:
+    --------
+    pca_df : pd.DataFrame
+        DataFrame containing PCA-transformed coordinates with OR labels.
+    variance_ratio : np.ndarray
+        Explained variance ratio of each principal component.
+    """
+    
+    
+    
+    # Voxelize the cavity
+    voxelized_array, voxel_shape = voxelize_cavity(
+        cavity_coords=list(cavity_coords.values()) if cavity_coords is not None else cavity_coords,
+        residue_coords=list(residue_coords.values())if residue_coords is not None else residue_coords,
+        resolution=resolution
+    )
+
+    # Convert voxel properties
+    labeled_voxels = np.array([convert_properties(voxel) for voxel in voxelized_array])
+
+    # Flatten voxel grids
+    flattened_voxels = np.array([voxel.flatten() for voxel in labeled_voxels])  # Shape (num_ORs, num_voxels)
+
+    # Remove constant columns
+    non_constant_mask = np.any(flattened_voxels != flattened_voxels[0, :], axis=0)
+    filtered_voxels = flattened_voxels[:, non_constant_mask]  # Shape (num_ORs, reduced_voxel_features)
+
+    print(f"Original features: {flattened_voxels.shape[1]}, Reduced features: {filtered_voxels.shape[1]}")
+
+    # Standardize for PCA
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(filtered_voxels)
+
+    # Apply PCA
+    pca = PCA(n_components=n_components)
+    reduced_data = pca.fit_transform(scaled_data)
+    variance_ratio = pca.explained_variance_ratio_
+
+    # Store results in a DataFrame
+    pca_df = pd.DataFrame(reduced_data, columns=[f'PCA_{i+1}' for i in range(n_components)], index=list(residue_coords.keys()))
+    pca_df = pca_df.reset_index().rename(columns={'index': 'or_cid'})
+
+    print("Reduced data shape:", reduced_data.shape)
+    print("Explained variance ratio:", variance_ratio)
+
+    return pca_df, variance_ratio

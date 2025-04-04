@@ -80,22 +80,28 @@ def get_continuous_colors(values, colormap="RdBu_r", midpoint=None):
 
     return colors
 
-def distinct_colors(label_list, category='tab10', custom_color=None, random_state=0, form='dict'):
+def distinct_colors(label_list=None, category='tab10', custom_color=None, random_state=0, form='dict', num_colors=None):
     """
-    Generate distinct colors for a list of labels.
+    Generate distinct colors for a list of labels or a specified number of colors.
 
     Parameters:
-    label_list (list): A list of labels for which you want to generate distinct colors.
+    label_list (list, optional): A list of labels for which you want to generate distinct colors.
+                                If None, will generate num_colors distinct colors.
     category (str): Category of distinct colors. Options are 'warm', 'floral', 'rainbow', 'pastel',
-                    matplotlib color palettes (e.g., 'tab10', 'Set2'), or None for random. Default is None.
-    custom_color (list): A custom list of colors to use.
+                    matplotlib color palettes (e.g., 'tab10', 'Set2'), or 'random'. Default is 'tab10'.
+    custom_color (list, optional): A custom list of colors to use.
     random_state (int): Seed for random color generation. Default is 0.
+    form (str): Output format - 'dict' for a label-to-color dictionary, 'list' for a list of colors. Default is 'dict'.
+    num_colors (int, optional): Number of colors to generate if label_list is None.
 
     Returns:
-    dict: A dictionary where labels are keys and distinct colors (in hexadecimal format) are values.
+    dict or list: Colors in the requested format (dictionary mapping labels to colors or list of colors).
     """
-    random.seed(random_state)
     
+    random.seed(random_state)
+    np.random.seed(random_state)
+    
+    # Predefined color palettes
     warm_colors = ['#fabebe', '#ffd8b1', '#fffac8', '#ffe119', '#ff7f00', '#e6194B']
     floral_colors = ['#bfef45', '#fabed4', '#aaffc3', '#ffd8b1', '#dcbeff', '#a9a9a9']
     rainbow_colors = ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4']
@@ -103,49 +109,142 @@ def distinct_colors(label_list, category='tab10', custom_color=None, random_stat
                      '#FDBF6F', '#FF7F00', '#CAB2D6', '#6A3D9A', '#FFFF99', '#B15928', 
                      '#8DD3C7', '#BEBADA', '#FFED6F']
     
-    color_dict = {}
-
-    if custom_color is not None: 
-        assert len(custom_color) >= len(label_list), "Provided label_list needs to be shorter than provided custom_color"
-        for i, _label in enumerate(label_list): 
-            color_dict[_label] = custom_color[i]
-        return color_dict
-
-    color_palette = []
-
-    # Handle predefined categories
-    if category in ['warm', 'floral', 'rainbow', 'pastel']: 
+    # Determine the number of colors needed
+    if label_list is not None:
+        required_colors = len(label_list)
+    elif num_colors is not None:
+        required_colors = num_colors
+    else:
+        raise ValueError("Either label_list or num_colors must be provided")
+    
+    # Handle custom colors
+    if custom_color is not None:
+        if len(custom_color) < required_colors:
+            raise ValueError(f"Not enough custom colors ({len(custom_color)}) for the required number ({required_colors})")
+        color_palette = custom_color[:required_colors]
+    
+    # Generate color palette based on category
+    else:
         if category == 'warm':
-            color_palette = warm_colors
+            base_palette = warm_colors
         elif category == 'floral':
-            color_palette = floral_colors
+            base_palette = floral_colors
         elif category == 'rainbow':
-            color_palette = rainbow_colors
-        elif category == 'pastel': 
-            color_palette = pastel_colors
-
-        # If more labels than available colors, interpolate colors
-        if len(label_list) > len(color_palette):
-            cmap = cm.get_cmap("tab20")  # Use a larger colormap
-            num_colors = len(label_list)
-            color_palette = [mcolors.to_hex(cmap(i / num_colors)) for i in range(num_colors)]
-    
-    # Handle matplotlib colormaps
-    elif category in cm.cmaps_listed or hasattr(cm, category):
-        cmap = cm.get_cmap(category) if hasattr(cm, category) else cm.get_cmap('tab10')
-        num_colors = len(label_list)
+            base_palette = rainbow_colors
+        elif category == 'pastel':
+            base_palette = pastel_colors
+        elif category == 'random':
+            # Generate completely random colors
+            color_palette = ["#{:06x}".format(random.randint(0, 0xFFFFFF)) for _ in range(required_colors)]
+        else:
+            # Try to use matplotlib colormap
+            try:
+                cmap = cm.get_cmap(category)
+                base_palette = [mcolors.to_hex(cmap(i)) for i in np.linspace(0, 1, min(required_colors, 20))]
+            except (ValueError, AttributeError):
+                # Fallback to tab10 if the specified category is not available
+                cmap = cm.get_cmap('tab10')
+                base_palette = [mcolors.to_hex(cmap(i)) for i in np.linspace(0, 1, min(required_colors, 10))]
         
-        # Ensure unique colors using interpolation
-        color_palette = [mcolors.to_hex(cmap(i / (num_colors - 1))) for i in range(num_colors)]
+        # If category wasn't 'random', ensure we have enough unique colors
+        if category != 'random':
+            color_palette = []
+            
+            # If we need more colors than in the base palette, use interpolation and HSV manipulation
+            if required_colors > len(base_palette):
+                # Start with all colors from the base palette
+                color_palette = base_palette.copy()
+                
+                # Convert to HSV for better interpolation and manipulation
+                hsv_colors = [mcolors.rgb_to_hsv(mcolors.to_rgb(color)) for color in base_palette]
+                
+                # Generate additional colors by manipulating hue and saturation
+                while len(color_palette) < required_colors:
+                    new_hsv = hsv_colors[len(color_palette) % len(hsv_colors)].copy()
+                    # Modify hue and saturation slightly
+                    new_hsv[0] = (new_hsv[0] + 0.1 * (len(color_palette) // len(hsv_colors))) % 1.0
+                    new_hsv[1] = max(0.4, min(1.0, new_hsv[1] + 0.05 * ((len(color_palette) // len(hsv_colors)) % 3 - 1)))
+                    
+                    # Convert back to RGB, then hex
+                    new_rgb = mcolors.hsv_to_rgb(new_hsv)
+                    new_hex = mcolors.to_hex(new_rgb)
+                    
+                    # Only add if the color is visually distinct enough (simple check)
+                    if all(mcolors.rgb_to_hsv(mcolors.to_rgb(new_hex))[0] != 
+                           mcolors.rgb_to_hsv(mcolors.to_rgb(existing))[0] for existing in color_palette[-10:]):
+                        color_palette.append(new_hex)
+                    else:
+                        # If too similar, add some randomness to the hue
+                        new_hsv[0] = (new_hsv[0] + random.random() * 0.2) % 1.0
+                        new_rgb = mcolors.hsv_to_rgb(new_hsv)
+                        color_palette.append(mcolors.to_hex(new_rgb))
+            else:
+                # If we have enough colors in the base palette, just use those
+                color_palette = base_palette[:required_colors]
+    
+    # Return results in the requested format
+    if label_list is None:
+        return color_palette if form == 'list' else {i: color for i, color in enumerate(color_palette)}
+    else:
+        if form == 'list':
+            return color_palette
+        else:
+            return {label: color_palette[i] for i, label in enumerate(label_list)}
 
-    # Assign distinct colors to each label
-    for i, label in enumerate(label_list):
-        color_dict[label] = color_palette[i]
+from plotly.validators.scatter.marker import SymbolValidator
+import random
+
+from plotly.validators.scatter.marker import SymbolValidator
+import random
+
+def distinct_shapes(label_list=None, random_state=0, form='dict', num_shapes=None):
+    """
+    Generate distinct shapes for a list of labels or a specified number of shapes.
+
+    Parameters:
+    label_list (list, optional): A list of labels for which you want to generate distinct shapes.
+                                 If None, will generate num_shapes distinct shapes.
+    random_state (int): Seed for reproducibility. Default is 0.
+    form (str): Output format - 'dict' for a label-to-shape dictionary, 'list' for a list of shapes. Default is 'dict'.
+    num_shapes (int, optional): Number of shapes to generate if label_list is None.
+
+    Returns:
+    dict or list: Shapes in the requested format (dictionary mapping labels to shapes or a list of shapes).
+    """
     
-    if form == 'list': 
-        return [color_dict[_label] for _label in color_dict]
-    
-    return color_dict
+    random.seed(random_state)
+
+    # Get all available marker symbols in Plotly
+    all_shapes = [s for i, s in enumerate(SymbolValidator().values) if i % 3 == 2]  
+
+    # Separate main shapes (without '-') and sub-shapes (with '-')
+    main_shapes = [s for s in all_shapes if '-' not in s]
+    sub_shapes = [s for s in all_shapes if '-' in s]
+
+    # Determine number of required shapes
+    if label_list is not None:
+        required_shapes = len(label_list)
+    elif num_shapes is not None:
+        required_shapes = num_shapes
+    else:
+        raise ValueError("Either label_list or num_shapes must be provided.")
+
+    # Prioritize main shapes, then use sub-shapes if needed
+    shape_list = main_shapes[:required_shapes]  # Take as many main shapes as available
+    if len(shape_list) < required_shapes:
+        remaining = required_shapes - len(shape_list)
+        shape_list.extend(sub_shapes[:remaining])  # Fill remaining slots with sub-shapes
+
+    # Ensure cycling if still not enough
+    if len(shape_list) < required_shapes:
+        combined_shapes = main_shapes + sub_shapes
+        shape_list = [combined_shapes[i % len(combined_shapes)] for i in range(required_shapes)]
+
+    # Return the requested format
+    if label_list is None:
+        return shape_list if form == 'list' else {i: shape for i, shape in enumerate(shape_list)}
+    else:
+        return {label: shape_list[i] for i, label in enumerate(label_list)} if form == 'dict' else shape_list
 
 def scale(values, reverse=False, factor = 1, scale_between = [1,0]):
     """
