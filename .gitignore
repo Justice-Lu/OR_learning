@@ -11,3 +11,4 @@ files/
 output/bc_voxel
 output/voxel_preprocessing
 output/pp_binding_cavity
+output/cnn

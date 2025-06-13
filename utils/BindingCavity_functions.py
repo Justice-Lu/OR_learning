@@ -376,27 +376,29 @@ def run_pyKVFinder_workflow(pdb_files, dict_keys=None, parameter_set=None, cavit
             removal_distance=params["removal_distance"],
             volume_cutoff=params["volume_cutoff"]
         )
-        
-        atomic_data = pyKVFinder.read_pdb(_pdb)
-        results_coord = grid2coords(results)
+        if results: 
+            atomic_data = pyKVFinder.read_pdb(_pdb)
+            results_coord = grid2coords(results)
 
-        if cavity_identity: # Extract in pyKV cavity form. contains cavity separation
-            cav_coords[_olfr] = results_coord[0] # Extract cavity coordinates
-            cavsurf_coords[_olfr] = results_coord[1] # Extract cavity surface coordinates
-            
-            res_coords_dict = res2atomic(results, atomic_data) # Extract cavity interacting residue coordinates
-            res_coords[_olfr] = {cav_res: (res_coords_dict[cav_res][:, [0, 2, 3, 4, 5, 6]]) for cav_res in res_coords_dict }
+            if cavity_identity: # Extract in pyKV cavity form. contains cavity separation
+                cav_coords[_olfr] = results_coord[0] # Extract cavity coordinates
+                cavsurf_coords[_olfr] = results_coord[1] # Extract cavity surface coordinates
+                
+                res_coords_dict = res2atomic(results, atomic_data) # Extract cavity interacting residue coordinates
+                res_coords[_olfr] = {cav_res: (res_coords_dict[cav_res][:, [0, 2, 3, 4, 5, 6]]) for cav_res in res_coords_dict }
 
-        else: # Extract in list form. 
-            cav_coords[_olfr] = [coord for cavity in results_coord[0].values() for coord in cavity]
-            cavsurf_coords[_olfr] = [coord for surface in results_coord[1].values() for coord in surface]
-            
-            res_coords_dict = res2atomic(results, atomic_data)
-            res_coords[_olfr] = [
-                list(x) for x in set(
-                    tuple(entry) for res in res_coords_dict for entry in res_coords_dict[res][:, [0, 2, 3, 4, 5, 6]].tolist()
-                )
-            ]
+            else: # Extract in list form. 
+                cav_coords[_olfr] = [coord for cavity in results_coord[0].values() for coord in cavity]
+                cavsurf_coords[_olfr] = [coord for surface in results_coord[1].values() for coord in surface]
+                
+                res_coords_dict = res2atomic(results, atomic_data)
+                res_coords[_olfr] = [
+                    list(x) for x in set(
+                        tuple(entry) for res in res_coords_dict for entry in res_coords_dict[res][:, [0, 2, 3, 4, 5, 6]].tolist()
+                    )
+                ]
+        else: 
+            print(f'{_pdb} SKIPPED NO CAVITIES FOUND')
 
     return cav_coords, cavsurf_coords, res_coords
 

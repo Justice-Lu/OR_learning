@@ -2,7 +2,10 @@ import numpy as np
 import pandas as pd 
 import plotly.graph_objects as go 
 import matplotlib.pyplot as plt
-from scipy.stats import pearsonr, linregress
+from scipy.stats import pearsonr, linregress, gaussian_kde
+from scipy.interpolate import UnivariateSpline
+from scipy import stats
+from matplotlib.colors import LogNorm
 
 import color_function as cf 
 
@@ -510,68 +513,280 @@ def plot_correlation(df, x_by, y_by,
 
 
 def plt_correlation(values1, values2,
-                     xlabel='', 
-                     ylabel='',
-                     title='', 
-                     plot_pearson_line=True, 
-                     linestyle='dotted',
-                     linecolor='black',
-                     edgecolor='gray',
-                     edgesize=10, 
-                     opacity=0.5, 
-                     text_xy=[0.05, 0.95], 
-                     figsize=[8,8]):
+                    xlabel='', 
+                    ylabel='',
+                    title='', 
+                    plot_pearson_line=True, 
+                    linestyle='dotted',
+                    linecolor='Red',
+                    linewidth=3, 
+                    linealpha=0.5,
+                    edgecolor='gray',
+                    edgesize=10, 
+                    opacity=0.5, 
+                    text_xy=[0.05, 0.95], 
+                    figsize=[5, 5],
+                    colorbar=False, 
+                    plot_style='scatter',  # 'scatter', 'hexbin', or 'hist2d'
+                    bins=100, cmap='Greys', 
+                    log_scale=True, 
+                    spines=False, 
+                    **kwargs):
     """
-    Creates a scatter plot with a line of best fit and Pearson correlation annotation.
+    Generate a correlation plot between two sets of values using various 2D plotting styles.
 
-    :param values1: Array-like, the first set of values (e.g., Grantham distances).
-    :param values2: Array-like, the second set of values (e.g., response correlations).
-    :param xlabel: String, label for the x-axis.
-    :param ylabel: String, label for the y-axis.
-    :param title: String, title of the plot.
-    :return: None, displays the plot.
+    The function supports scatter, hexbin, and 2D histogram visualizations. It also computes
+    and optionally plots the Pearson correlation line, along with annotation of the correlation
+    coefficient (r), r², and p-value.
+
+    Parameters:
+        values1 (array-like): Values to be plotted on the x-axis.
+        values2 (array-like): Values to be plotted on the y-axis.
+        xlabel (str): Label for the x-axis.
+        ylabel (str): Label for the y-axis.
+        title (str): Title of the plot.
+        plot_pearson_line (bool): Whether to plot the Pearson correlation line and stats.
+        linestyle (str): Line style for the Pearson correlation line.
+        linecolor (str): Color of the Pearson correlation line.
+        edgecolor (str): Marker color for scatter plot points.
+        edgesize (float): Marker size for scatter plot points.
+        opacity (float): Transparency for scatter plot markers.
+        text_xy (list): (x, y) relative axes coordinates for placing the correlation text box.
+        figsize (list): Size of the figure in inches [width, height].
+        colorbar (bool): Whether to display a colorbar for hexbin or hist2d plots.
+        plot_style (str): One of 'scatter', 'hexbin', or 'hist2d'.
+        bins (int): Number of bins for hexbin or hist2d plots.
+        cmap (str): Colormap used for hexbin or hist2d plots.
+        log_scale (bool): Whether to apply logarithmic normalization to the color scale.
+
+    Returns:
+        matplotlib.figure.Figure: The matplotlib Figure object containing the plot.
     """
-    # Ensure inputs are numpy arrays for consistency
+
     values1 = np.array(values1)
     values2 = np.array(values2)
 
-    # Calculate Pearson correlation and p-value
+    # Compute Pearson stats
     r, p_value = pearsonr(values1, values2)
-
-    # Calculate the line of best fit
     slope, intercept, _, _, _ = linregress(values1, values2)
 
-    # Create the scatter plot
-    plt.figure(figsize=(figsize[0], figsize[1]))
-    plt.scatter(values1, values2, color=edgecolor, alpha=opacity, s=edgesize)
-    
-    # Add labels, title, and grid
-    plt.xlabel(xlabel, fontsize=12)
-    plt.ylabel(ylabel, fontsize=12)
-    plt.title(title, fontsize=14)
+    # Create OO figure
+    fig, ax = plt.subplots(figsize=figsize)
+    norm = LogNorm() if log_scale else None
 
-    # Add text annotation for Pearson correlation, r^2, and p-value
+    if plot_style == 'scatter':
+        ax.scatter(values1, values2, color=edgecolor, alpha=opacity, s=edgesize)
+        
+    elif plot_style == 'scatter_line': 
+        smooth = kwargs.get('smooth_scatter_line', False)
+        if smooth:
+            degree = kwargs.get('poly_degree', 1)
+            coeffs = np.polyfit(values1, values2, deg=degree)
+            poly = np.poly1d(coeffs)
 
-    if plot_pearson_line: 
-        sorted_idx = np.argsort(values1)  # Get indices that would sort values1
-        sorted_x = values1[sorted_idx]    # Sort values1
-        sorted_y = (slope * sorted_x + intercept)  # Compute y-values for sorted x
+            x_fit = np.linspace(np.min(values1), np.max(values1), 500)
+            y_fit = poly(x_fit)
+            ax.plot(x_fit, y_fit, color=edgecolor, alpha=opacity, linewidth=edgesize)
+        else:
+            ax.plot(values1, values2, color=edgecolor, alpha=opacity, linewidth=edgesize)
+    elif plot_style == 'hexbin':
+        hb = ax.hexbin(values1, values2, gridsize=bins, cmap=cmap, norm=norm, mincnt=1)
+        if colorbar:
+            cb = fig.colorbar(hb, ax=ax)
+            cb.set_label('Counts (log)' if log_scale else 'Counts')
 
-        plt.plot(sorted_x, sorted_y, color=linecolor, linestyle=linestyle, label="Pearson Line", alpha=0.6)
-        plt.text(
-            text_xy[0], text_xy[1],  # Adjust position as needed
+    elif plot_style == 'hist2d':
+        counts, xedges, yedges, img = ax.hist2d(values1, values2, bins=bins, cmap=cmap, norm=norm)
+        if colorbar:
+            cb = fig.colorbar(img, ax=ax)
+            cb.set_label('Counts (log)' if log_scale else 'Counts')
+
+    else:
+        raise ValueError(f"plot_style must be one of ['scatter', 'hexbin', 'hist2d'], got '{plot_style}'.")
+
+    # Labels and title
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14)
+
+    # Regression line and annotation
+    if plot_pearson_line:
+        sorted_idx = np.argsort(values1)
+        sorted_x = values1[sorted_idx]
+        sorted_y = slope * sorted_x + intercept
+
+        ax.plot(sorted_x, sorted_y, color=linecolor, 
+                linestyle=linestyle, linewidth=linewidth, 
+                alpha=linealpha)
+
+        ax.text(
+            text_xy[0], text_xy[1],
             f"Pearson r = {r:.3f}\n$r^2$ = {r**2:.3f}\np-value = {p_value:.3e}",
-            fontsize=12,
+            fontsize=kwargs.get('pearson_fontsize', 5),
             ha="left", va="top",
-            transform=plt.gca().transAxes,
-            bbox=dict(boxstyle="round,pad=0.3", edgecolor="gray", facecolor="white", alpha=0.5),
+            transform=ax.transAxes,
+            bbox=dict(boxstyle="round,pad=0.3", 
+                      edgecolor="white", 
+                      facecolor="white", alpha=0),
         )
 
-    # Add tight layout
-    plt.tight_layout()
+    fig.tight_layout()
+    
+    if not spines: 
+        fig = plt_clean_axes(fig)
+        
+    return fig, ax 
 
-    # Show the plot
-    return plt
+def plt_correlation_subplots(values_pairs,
+                    ax = None, 
+                    ncols=1,
+                    xlabels='', 
+                    ylabels='',
+                    titles='', 
+                    plot_pearson_line=True, 
+                    linestyle='dotted',
+                    linecolor='black',
+                    linewidth=3, 
+                    linealpha=0.5,
+                    edgecolor='gray',
+                    edgesize=10, 
+                    opacity=0.5, 
+                    text_xy=[0.05, 0.95], 
+                    figsize_per_plot=(4,4),
+                    # figsize=[8, 8],
+                    colorbar=False, 
+                    plot_style='scatter',  # 'scatter', 'hexbin', or 'hist2d'
+                    bins=100, cmap='Greys', 
+                    log_scale=True, 
+                    spines=False,
+                    **kwargs):
+    """
+    Generate a correlation plot between two sets of values using various 2D plotting styles.
+
+    The function supports scatter, hexbin, and 2D histogram visualizations. It also computes
+    and optionally plots the Pearson correlation line, along with annotation of the correlation
+    coefficient (r), r², and p-value.
+
+    Parameters:
+        values1 (array-like): Values to be plotted on the x-axis.
+        values2 (array-like): Values to be plotted on the y-axis.
+        xlabel (str): Label for the x-axis.
+        ylabel (str): Label for the y-axis.
+        title (str): Title of the plot.
+        plot_pearson_line (bool): Whether to plot the Pearson correlation line and stats.
+        linestyle (str): Line style for the Pearson correlation line.
+        linecolor (str): Color of the Pearson correlation line.
+        edgecolor (str): Marker color for scatter plot points.
+        edgesize (float): Marker size for scatter plot points.
+        opacity (float): Transparency for scatter plot markers.
+        text_xy (list): (x, y) relative axes coordinates for placing the correlation text box.
+        figsize (list): Size of the figure in inches [width, height].
+        colorbar (bool): Whether to display a colorbar for hexbin or hist2d plots.
+        plot_style (str): One of 'scatter', 'hexbin', or 'hist2d'.
+        bins (int): Number of bins for hexbin or hist2d plots.
+        cmap (str): Colormap used for hexbin or hist2d plots.
+        log_scale (bool): Whether to apply logarithmic normalization to the color scale.
+
+    Returns:
+        matplotlib.figure.Figure: The matplotlib Figure object containing the plot.
+    """
+
+    n = len(values_pairs)
+    nrows = int(np.ceil(n / ncols))
+    figsize = (figsize_per_plot[0] * ncols, figsize_per_plot[1] * nrows)
+
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    axes = np.array(axes).reshape(-1)
+    
+    
+    for i, (values1, values2) in enumerate(values_pairs):
+        ax = axes[i]
+        values1 = np.array(values1)
+        values2 = np.array(values2)
+
+        # Pearson
+        r, p_value = pearsonr(values1, values2)
+        slope, intercept, *_ = linregress(values1, values2)
+
+        # Plot style
+        style = kwargs.get('plot_style', plot_style)
+        norm = LogNorm() if kwargs.get('log_scale', log_scale) else None
+
+        if style == 'scatter':
+            ax.scatter(values1, values2,
+                       color=kwargs.get('edgecolor', edgecolor),
+                       alpha=kwargs.get('opacity', opacity),
+                       s=kwargs.get('edgesize', edgesize))
+        elif style == 'hexbin':
+            hb = ax.hexbin(values1, values2, gridsize=kwargs.get('bins', bins),
+                           cmap=kwargs.get('cmap', cmap), norm=norm, mincnt=1)
+            if kwargs.get('colorbar', colorbar):
+                fig.colorbar(hb, ax=ax)
+        elif style == 'hist2d':
+            counts, xedges, yedges, img = ax.hist2d(values1, values2, bins=kwargs.get('bins', bins),
+                                                    cmap=kwargs.get('cmap', cmap), norm=norm)
+            if kwargs.get('colorbar', colorbar):
+                fig.colorbar(img, ax=ax)
+        else:
+            raise ValueError("Invalid plot_style")
+
+        if kwargs.get('plot_pearson_line', plot_pearson_line):
+            sorted_idx = np.argsort(values1)
+            ax.plot(values1[sorted_idx],
+                    slope * values1[sorted_idx] + intercept,
+                    color=kwargs.get('linecolor', linecolor),
+                    linestyle=kwargs.get('linestyle', linestyle),
+                    linewidth=kwargs.get('linewidth', linewidth),
+                    alpha=kwargs.get('linealpha', linealpha))
+            tx, ty = kwargs.get('text_xy', text_xy)
+            ax.text(tx, ty,
+                    f"Pearson r = {r:.3f}\n$r^2$ = {r**2:.3f}\np = {p_value:.1e}",
+                    fontsize=kwargs.get('pearson_fontsize', 5),
+                    ha='left', va='top',
+                    transform=ax.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3",
+                              edgecolor="white",
+                              facecolor="white", alpha=0))
+
+        # Labels
+        if xlabels: ax.set_xlabel(xlabels[i])
+        if ylabels: ax.set_ylabel(ylabels[i])
+        if titles:  ax.set_title(titles[i])
+
+        if not kwargs.get('spines', spines):
+            fig = plt_clean_axes(fig)
+
+    # Hide unused axes
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.tight_layout()
+    return fig, axes[:n]
+
+
+def plt_clean_axes(fig, remove_spines=True, spine_color='black', tick_direction='out'):
+    """
+    Applies consistent styling to all axes in the figure.
+
+    Parameters:
+        fig: matplotlib Figure object
+        remove_spines: bool, if True, hides top and right spines
+        spine_color: str, color to apply to visible spines
+        tick_direction: str, direction of ticks ('in', 'out', 'inout')
+    """
+    for ax in fig.axes:
+        if remove_spines:
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+        
+        for spine in ['bottom', 'left']:
+            ax.spines[spine].set_color(spine_color)
+        
+        ax.tick_params(direction=tick_direction, colors=spine_color)
+
+        # Optional: remove grid or background
+        ax.set_facecolor('white')
+    return fig
 
 
 def plot_weblogo(frequency_matrix, 
@@ -666,3 +881,230 @@ def plot_weblogo(frequency_matrix,
     plt.tight_layout()
 
     return fig
+
+def add_p_value_annotation(fig, 
+                           array_columns, 
+                           just_annotate = None,
+                           test_type = 'ranksums', 
+                           popmean = None, 
+                           y_padding = True, 
+                           subplot=None, 
+                           include_tstat=None, 
+                           p_round=3,
+                           font_size=14, 
+                           show=None, 
+                           _format=dict(interline=0.07, text_height=1.07, color='black')):
+    ''' Adds notations giving the p-value between two box plot data (t-test two-sided comparison)
+    
+    Parameters:
+    ----------
+    fig: figure
+        plotly boxplot figure
+    array_columns: np.array
+        array of which columns to compare 
+        e.g.: [[0,1], [1,2]] compares column 0 with 1 and 1 with 2
+    subplot: None or int
+        specifies if the figures has subplots and what subplot to add the notation to
+    _format: dict
+        format characteristics for the lines
+
+    Returns:
+    -------
+    fig: figure
+        figure with the added notation
+    '''
+    
+    assert test_type in ['ranksums', 'ttest_ind', 'ttest_rel', 'ttest_1samp'] , "Please specify test_type to be either ranksums or ttest"
+    if test_type == 'ttest_1samp': 
+        assert popmean is not None, "ttest_1samp requires popmean value"
+    
+    if just_annotate is not None: 
+        assert len(just_annotate) == len(array_columns), "'just_annotate' and 'array_columns' len must be identical "
+    
+    # Specify in what y_range to plot for each pair of columns
+    y_range = np.zeros([len(array_columns), 2])
+    if y_padding:
+        for i in range(len(array_columns)):
+            y_range[i] = [1.01+i*_format['interline'], 1.02+i*_format['interline']]
+    else: 
+        for i in range(len(array_columns)):
+            y_range[i] = [1.01+_format['interline'], 1.02+_format['interline']]
+
+    # Get values from figure
+    fig_dict = fig.to_dict()
+
+    # Get indices if working with subplots
+    if subplot:
+        if subplot == 1:
+            subplot_str = ''
+        else:
+            subplot_str =str(subplot)
+        indices = [] #Change the box index to the indices of the data for that subplot
+        for index, data in enumerate(fig_dict['data']):
+            #print(index, data['xaxis'], 'x' + subplot_str)
+            if data['xaxis'] == 'x' + subplot_str:
+                indices = np.append(indices, index)
+        indices = [int(i) for i in indices]
+        print((indices))
+    else:
+        subplot_str = ''
+
+    # Print the p-values
+    for index, column_pair in enumerate(array_columns):
+        if subplot:
+            data_pair = [indices[column_pair[0]], indices[column_pair[1]]]
+        else:
+            data_pair = column_pair
+
+        # Mare sure it is selecting the data and subplot you want
+        #print('0:', fig_dict['data'][data_pair[0]]['name'], fig_dict['data'][data_pair[0]]['xaxis'])
+        #print('1:', fig_dict['data'][data_pair[1]]['name'], fig_dict['data'][data_pair[1]]['xaxis'])
+
+        # Get the p-value
+        if test_type == 'ttest_ind': 
+            tstat, pvalue = stats.ttest_ind(
+                fig_dict['data'][data_pair[0]]['y'],
+                fig_dict['data'][data_pair[1]]['y'],
+                equal_var=False,
+            )
+        elif test_type == 'ttest_rel':
+            tstat, pvalue = stats.ttest_rel(
+                fig_dict['data'][data_pair[0]]['y'],
+                fig_dict['data'][data_pair[1]]['y'],
+            )
+        elif test_type == 'ranksums':
+            tstat, pvalue = stats.ranksums(
+                fig_dict['data'][data_pair[0]]['y'],
+                fig_dict['data'][data_pair[1]]['y'],
+            )
+        elif test_type == 'ttest_1samp':
+            tstat, pvalue = stats.ttest_1samp(
+                fig_dict['data'][data_pair[0]]['y'],
+                popmean = popmean
+            )
+       
+        if include_tstat: 
+            symbol = format_pvalue(pvalue, p_round, t = tstat, show=show) 
+        else: 
+            symbol = format_pvalue(pvalue, p_round, show=show)
+            
+        if column_pair[0] != column_pair[1]: # If the column pair is the same, don't label lines
+            # Vertical line
+            fig.add_shape(type="line",
+                xref="x"+subplot_str, yref="y"+subplot_str+" domain",
+                x0=column_pair[0], y0=y_range[index][0], 
+                x1=column_pair[0], y1=y_range[index][1],
+                line=dict(color=_format['color'], width=2,)
+            )
+            # Horizontal line
+            fig.add_shape(type="line",
+                xref="x"+subplot_str, yref="y"+subplot_str+" domain",
+                x0=column_pair[0], y0=y_range[index][1], 
+                x1=column_pair[1], y1=y_range[index][1],
+                line=dict(color=_format['color'], width=2,)
+            )
+            # Vertical line
+            fig.add_shape(type="line",
+                xref="x"+subplot_str, yref="y"+subplot_str+" domain",
+                x0=column_pair[1], y0=y_range[index][0], 
+                x1=column_pair[1], y1=y_range[index][1],
+                line=dict(color=_format['color'], width=2,)
+            )
+        
+        # If just_annotate (manual annotations) hard overwrites calculated stats in this function. Merely provides a 'symbol' to annotate
+        if just_annotate is not None: 
+            symbol = just_annotate[index]
+        
+        ## add text at the correct x, y coordinates
+        ## for bars, there is a direct mapping from the bar number to 0, 1, 2...
+        fig.add_annotation(dict(font=dict(color=_format['color'],
+                                          size=font_size),
+            x=(column_pair[0] + column_pair[1])/2,
+            y=y_range[index][1]*_format['text_height'],
+            showarrow=False,
+            text=symbol,
+            textangle=0,
+            xref="x"+subplot_str,
+            yref="y"+subplot_str+" domain"
+        ))
+    return fig
+
+def format_pvalue(pvalue, p_round=3, t=None, show=None):
+    """
+    Format a p-value as a string with significance symbols.
+
+    Parameters:
+    pvalue (float): The p-value to be formatted.
+    p_round (int): Number of digits to show in scientific notation.
+    t (float, optional): Optional t-statistic to include.
+    show (str or None): 
+        If 'symbol', returns only the significance label (e.g. '*').
+        If 'pvalue', returns only the formatted p-value (e.g. 'p=1.23e-03').
+        If None, returns full string with significance and p-value (and t if provided).
+
+    Returns:
+    str: The formatted p-value string.
+    """
+    
+    # Choose significance symbol
+    if pvalue >= 0.05:
+        symbol_part = 'ns'
+    elif pvalue >= 0.01:
+        symbol_part = '*'
+    elif pvalue >= 0.001:
+        symbol_part = '**'
+    else:
+        symbol_part = '***'
+    
+    # Format p-value using scientific notation
+    pval_part = f'p={pvalue:.{p_round}e}'
+    
+    # Handle return based on return_part
+    if show == 'symbol':
+        return symbol_part
+    elif show == 'pvalue':
+        return pval_part
+    
+    # Default: full output
+    symbol = f'{symbol_part} <br>{pval_part}'
+    if t is not None:
+        symbol += f'<br>t={round(t, 3)}'
+    
+    return symbol
+
+from itertools import combinations
+from scipy.spatial.distance import pdist
+
+def compute_pairwise_pca_distance(pca_df, 
+                                  zscore=True, colnames=['OR1', 'OR2', 'PCA_Distance']):
+    """
+    Compute pairwise Euclidean distances between PCA coordinates, with optional z-scoring.
+
+    Parameters:
+        pca_df (pd.DataFrame): DataFrame with PCA coordinates. Index should be entry names.
+        zscore (bool): Whether to apply z-scoring to the distances. Default is True.
+        colnames (list): List of 3 strings for naming the columns:
+                         [name1, name2, distance_name]. Default is ['OR1', 'OR2', 'ESM_Distance'].
+
+    Returns:
+        pd.DataFrame: DataFrame with columns [name1, name2, distance_name].
+    """
+    if len(colnames) != 3:
+        raise ValueError("colnames must be a list of 3 strings: [name1, name2, distance_name]")
+
+    # Compute pairwise distances (returns condensed form)
+    pca_dist = pdist(pca_df.values, metric='euclidean')
+
+    # Optionally apply z-score
+    if zscore:
+        pca_dist = (pca_dist - np.mean(pca_dist)) / np.std(pca_dist)
+
+    # Generate all unique index combinations
+    names = pca_df.index.to_list()
+    pairs = list(combinations(names, 2))
+
+    # Assemble final DataFrame
+    distance_df = pd.DataFrame(pairs, columns=colnames[:2])
+    distance_df[colnames[2]] = pca_dist
+
+    return distance_df

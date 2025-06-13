@@ -190,9 +190,56 @@ def distinct_colors(label_list=None, category='tab10', custom_color=None, random
             return color_palette
         else:
             return {label: color_palette[i] for i, label in enumerate(label_list)}
+        
+import colorsys
 
-from plotly.validators.scatter.marker import SymbolValidator
-import random
+def generate_faded_shades(hex_color, shades, lightness_range=(0.3, 0.9)):
+    """
+    Generate lighter (faded) hex color shades from a base color.
+
+    Parameters:
+    - hex_color: base hex color string (e.g. '#1f77b4')
+    - shades: int for number of shades, or list of strings for labeled shades
+    - lightness_range: (min, max) lightness to span the faded shades
+
+    Returns:
+    - List of hex colors if shades is int
+    - Dict {label: hex} if shades is list of strings
+    """
+    if isinstance(shades, int):
+        n_shades = shades
+        keys = None
+    elif isinstance(shades, list) and all(isinstance(k, str) for k in shades):
+        n_shades = len(shades)
+        keys = shades
+    else:
+        raise ValueError("`shades` must be either an integer or a list of strings.")
+
+    # Convert hex to RGB
+    hex_color_clean = hex_color.lstrip('#')
+    r, g, b = [int(hex_color_clean[i:i+2], 16)/255. for i in (0, 2 ,4)]
+
+    # Convert to HLS
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+
+    # Compute linearly spaced lightness values
+    lightness_values = [
+        lightness_range[0] + i * (lightness_range[1] - lightness_range[0]) / max(1, n_shades - 1)
+        for i in range(n_shades)
+    ]
+
+    # Generate colors
+    faded_colors = []
+    for i, lv in enumerate(lightness_values):
+        if i == 0:
+            faded_colors.append(f'#{hex_color_clean}')
+        else:
+            r_f, g_f, b_f = colorsys.hls_to_rgb(h, lv, s)
+            hex_faded = '#{0:02x}{1:02x}{2:02x}'.format(int(r_f*255), int(g_f*255), int(b_f*255))
+            faded_colors.append(hex_faded)
+
+    return dict(zip(keys, faded_colors)) if keys else faded_colors
+
 
 from plotly.validators.scatter.marker import SymbolValidator
 import random
