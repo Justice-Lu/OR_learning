@@ -307,7 +307,7 @@ voxel_shape = voxel_tensor.shape  # [N, D, H, W, C]
 C, D, H, W = voxel_shape[-1], voxel_shape[1], voxel_shape[2], voxel_shape[3]
 
 # Saving directory
-save_path = '/mnt/data2/Justice/OR_learning/output/cnn/'
+save_path = '/mnt/data2/Justice/OR_learning/output/cnn_spatialESM/'
 
 for i, param_values in enumerate(sampled_params):
     param_dict = dict(zip(param_keys, param_values))
