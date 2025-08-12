@@ -183,23 +183,67 @@ or_index_map = {or_id: i for i, or_id in enumerate(or_ids)}
 ligand_index_map = {cid: i for i, cid in enumerate(ligand_cids)}
 voxel_tensor = torch.stack(voxels)
 
+# def create_balanced_datasets(ps6_df, voxel_tensor, ligand_fp_tensor,
+#                              or_index_map, ligand_index_map,
+#                              total_samples=1000, positive_weight=0.5, seed=None):
+
+#     positive_df = ps6_df[ps6_df['logFC_adj_zscore'] >= 2]
+#     negative_df = ps6_df[ps6_df['logFC_adj_zscore'] < 2]
+
+#     n_pos = int(total_samples * positive_weight)
+#     n_neg = total_samples - n_pos
+
+#     sampled_pos = positive_df.sample(n=min(n_pos, len(positive_df)), random_state=seed)
+#     sampled_neg = negative_df.sample(n=n_neg, random_state=seed)
+
+#     subset_df = pd.concat([sampled_pos, sampled_neg]).sample(frac=1.0, random_state=seed)
+#     train_df, test_df = train_test_split(subset_df, test_size=0.2, random_state=seed)
+#     train_df, val_df = train_test_split(train_df, test_size=0.2, random_state=seed)
+
+#     train_dataset = ORLigandIndexDataset(train_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
+#     val_dataset = ORLigandIndexDataset(val_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
+#     test_dataset = ORLigandIndexDataset(test_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
+
+#     return train_dataset, val_dataset, test_dataset
+
+
 def create_balanced_datasets(ps6_df, voxel_tensor, ligand_fp_tensor,
                              or_index_map, ligand_index_map,
-                             total_samples=1000, positive_weight=0.5, seed=None):
+                             total_train_samples=1000, positive_weight=0.5,
+                             val_size=0.1, test_size=0.1, seed=None):
+    np.random.seed(seed)
 
+    # Positive and negative sets
     positive_df = ps6_df[ps6_df['logFC_adj_zscore'] >= 2]
     negative_df = ps6_df[ps6_df['logFC_adj_zscore'] < 2]
 
-    n_pos = int(total_samples * positive_weight)
-    n_neg = total_samples - n_pos
+    # === 1. Create balanced training set ===
+    n_pos = int(total_train_samples * positive_weight)
+    n_neg = total_train_samples - n_pos
+    train_pos = positive_df.sample(n=min(n_pos, len(positive_df)), random_state=seed)
+    train_neg = negative_df.sample(n=n_neg, random_state=seed)
+    train_df = pd.concat([train_pos, train_neg]).sample(frac=1.0, random_state=seed)
 
-    sampled_pos = positive_df.sample(n=min(n_pos, len(positive_df)), random_state=seed)
-    sampled_neg = negative_df.sample(n=n_neg, random_state=seed)
+    # === 2. Create *realistic* val and test sets from remaining data ===
+    train_pairs = set(zip(train_df['or'], train_df['ligand']))
+    def not_in_train(row): return (row['or'], row['ligand']) not in train_pairs
+    remaining_df = ps6_df[ps6_df.apply(not_in_train, axis=1)]
 
-    subset_df = pd.concat([sampled_pos, sampled_neg]).sample(frac=1.0, random_state=seed)
-    train_df, test_df = train_test_split(subset_df, test_size=0.2, random_state=seed)
-    train_df, val_df = train_test_split(train_df, test_size=0.2, random_state=seed)
+    val_df, test_df = train_test_split(
+        remaining_df,
+        test_size=test_size,
+        stratify=(remaining_df['logFC_adj_zscore'] >= 2),
+        random_state=seed
+    )
+    # Note: the rest goes to validation
+    val_df, _ = train_test_split(
+        val_df,
+        test_size=0,  # already split off test
+        stratify=(val_df['logFC_adj_zscore'] >= 2),
+        random_state=seed
+    )
 
+    # Create datasets
     train_dataset = ORLigandIndexDataset(train_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
     val_dataset = ORLigandIndexDataset(val_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
     test_dataset = ORLigandIndexDataset(test_df, voxel_tensor, ligand_fp_tensor, or_index_map, ligand_index_map)
