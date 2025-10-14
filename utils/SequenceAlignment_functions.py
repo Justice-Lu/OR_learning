@@ -697,58 +697,58 @@ def interpolate_bw(position, known_positions):
 
     return round(inferred_bw, 2)
 
-def map_residues_to_bw(query_residues, ref_seq_name, alignment, target_seq_name, bw_positions=None):
-    """
-    Maps query residues from the reference sequence to the target sequence and infers BW numbering.
+# def map_residues_to_bw(query_residues, ref_seq_name, alignment, target_seq_name, bw_positions=None):
+#     """
+#     Maps query residues from the reference sequence to the target sequence and infers BW numbering.
 
-    Parameters:
-    - query_residues: List of residue positions (e.g., ['H104', 'F155']).
-    - ref_seq_name: The name of the reference sequence in the alignment.
-    - alignment: Dictionary of sequence alignments.
-    - target_seq_name: The target sequence name in the alignment.
-    - bw_positions: Dictionary of known BW numbers for the reference sequence.
+#     Parameters:
+#     - query_residues: List of residue positions (e.g., ['H104', 'F155']).
+#     - ref_seq_name: The name of the reference sequence in the alignment.
+#     - alignment: Dictionary of sequence alignments.
+#     - target_seq_name: The target sequence name in the alignment.
+#     - bw_positions: Dictionary of known BW numbers for the reference sequence.
 
-    Returns:
-    - Dictionary mapping target residues to inferred BW numbers.
-    """
+#     Returns:
+#     - Dictionary mapping target residues to inferred BW numbers.
+#     """
     
-    if bw_positions is None: 
-        print(f'using default Or51E2 bw_position . . . on {ref_seq_name}')
-        bw_positions = {"N41":'1.50', "D69": '2.50', "R121":'3.50', 
-                       "V149":'4.50', "C178":'45.50', "D209":'5.50', 
-                       "P253":'6.50', "P288":'7.50'}    
+#     if bw_positions is None: 
+#         print(f'using default Or51E2 bw_position . . . on {ref_seq_name}')
+#         bw_positions = {"N41":'1.50', "D69": '2.50', "R121":'3.50', 
+#                        "V149":'4.50', "C178":'45.50', "D209":'5.50', 
+#                        "P253":'6.50', "P288":'7.50'}    
     
-    ref_seq = alignment[ref_seq_name]
-    target_seq = alignment[target_seq_name]
+#     ref_seq = alignment[ref_seq_name]
+#     target_seq = alignment[target_seq_name]
 
-    # Step 1: Convert BW positions to residue indices
-    bw_residue_positions = {int(res[1:]): float(bw) for res, bw in bw_positions.items()}
+#     # Step 1: Convert BW positions to residue indices
+#     bw_residue_positions = {int(res[1:]): float(bw) for res, bw in bw_positions.items()}
 
-    # Step 2: Map OBR residues directly using the aligned sequence
-    target_bw_map = {}
-    ref_res_index    = 0  # Track reference sequence index ignoring gaps
-    target_res_index = 0
+#     # Step 2: Map OBR residues directly using the aligned sequence
+#     target_bw_map = {}
+#     ref_res_index    = 0  # Track reference sequence index ignoring gaps
+#     target_res_index = 0
     
-    for ref_res in ref_seq:
-        if ref_res == "-":
-            continue  # Skip gaps in reference sequence
-        ref_res_index += 1  # Increment non-gap reference index
+#     for ref_res in ref_seq:
+#         if ref_res == "-":
+#             continue  # Skip gaps in reference sequence
+#         ref_res_index += 1  # Increment non-gap reference index
         
-        if target_seq[ref_res_index - 1] != "-": 
-            target_res_index += 1
+#         if target_seq[ref_res_index - 1] != "-": 
+#             target_res_index += 1
 
-        for _res in query_residues:
-            # obr_res_num = int(obr_res[1:])  # Extract numeric residue position (e.g., 'H104' → 104)
-            res_num = int(re.sub( r"\D", "", _res))  # Extract numeric residue position (e.g., 'H104' → 104)
+#         for _res in query_residues:
+#             # obr_res_num = int(obr_res[1:])  # Extract numeric residue position (e.g., 'H104' → 104)
+#             res_num = int(re.sub( r"\D", "", _res))  # Extract numeric residue position (e.g., 'H104' → 104)
             
-            if ref_res_index == res_num:  # Find the corresponding aligned position
-                target_res = target_seq[ref_res_index - 1]  # Get target residue at the same alignment position
+#             if ref_res_index == res_num:  # Find the corresponding aligned position
+#                 target_res = target_seq[ref_res_index - 1]  # Get target residue at the same alignment position
                 
-                if target_res != "-":  # Ignore cases where target sequence has a gap
-                    inferred_bw = interpolate_bw(ref_res_index, bw_residue_positions)
-                    target_bw_map[f"{target_res}{target_res_index}"] = inferred_bw
+#                 if target_res != "-":  # Ignore cases where target sequence has a gap
+#                     inferred_bw = interpolate_bw(ref_res_index, bw_residue_positions)
+#                     target_bw_map[f"{target_res}{target_res_index}"] = inferred_bw
 
-    return target_bw_map
+#     return target_bw_map
 
 def update_bw_positions(ref_seq_name, alignment, bw_positions):
     """
@@ -826,7 +826,7 @@ def map_residues_to_bw(residue_list, alignment, target_seq_name, bw_positions):
             inferred_bw = interpolate_bw(aligned_index, bw_positions)
             residue_label = re.sub(r"\D", "", residue_num_to_label[target_res_index])
             # residue_to_bw[residue_label] = inferred_bw  
-            residue_to_bw[f"{target_res}{residue_label}"] = inferred_bw
+            residue_to_bw[f"{target_res}{residue_label}"] = f'{inferred_bw:.2f}'
     return residue_to_bw
 
 
@@ -868,3 +868,44 @@ def compare_bw_numbers(target_bw, query_bw):
 
     # Print table
     print(tabulate(table, headers=["Target BW", "Overlapping BW", "Missing Query BW"]))
+
+
+def filter_get_conservation(df, filter_names=None):
+    """
+    Compute consensus sequence and conservation from a filtered alignment DataFrame.
+
+    Args:
+        df (pd.DataFrame): Filtered alignment (rows = sequences, cols = positions).
+        filter_names (list, optional): List of sequence IDs (row labels) to include. 
+                                       If None, use all rows.
+
+    Returns:
+        consensus_letters (list of str): Consensus amino acid at each position.
+        conservation_percent (list of float): Percent conservation at each position.
+        positions (list): Column labels corresponding to positions.
+    """
+    # Subset rows if filter is given
+    if filter_names is not None:
+        df = df.loc[df.index.intersection(filter_names)]
+    
+    if df.empty:
+        raise ValueError("No sequences found after filtering. Check filter_names or df index.")
+    
+    consensus_letters = []
+    conservation_percent = []
+
+    for col in df.columns:
+        col_data = df[col]
+        # Exclude gaps
+        # aa_series = col_data[col_data != '-']
+        aa_series = col_data
+        counts = Counter(aa_series)
+        if counts:
+            most_common_aa, count = counts.most_common(1)[0]
+            consensus_letters.append(most_common_aa)
+            conservation_percent.append(count / len(aa_series) * 100)
+        else:
+            consensus_letters.append(' ')
+            conservation_percent.append(0.0)
+    
+    return df, consensus_letters, conservation_percent

@@ -8,8 +8,9 @@ __pycache__
 notebooks/old/
 files/
 
+output*
 output/bc_voxel
 output/voxel_preprocessing
 output/pp_binding_cavity
 output/cnn*
-
+output/AF3*

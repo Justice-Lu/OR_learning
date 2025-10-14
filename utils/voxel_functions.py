@@ -258,6 +258,14 @@ AA_VDW_DICT = {
     'GEN': {'AC': 2.0, 'AG': 1.72, 'AL': 2.0, 'AM': 2.0, 'AR': 1.88, 'AS': 1.85, 'AT': 2.0, 'AU': 1.66, 'B': 2.0, 'BA': 2.0, 'BE': 2.0, 'BH': 2.0, 'BI': 2.0, 'BK': 2.0, 'BR': 1.85, 'C': 1.66, 'CA': 2.0, 'CD': 1.58, 'CE': 2.0, 'CF': 2.0, 'CL': 1.75, 'CM': 2.0, 'CO': 2.0, 'CR': 2.0, 'CS': 2.0, 'CU': 1.4, 'DB': 2.0, 'DS': 2.0, 'DY': 2.0, 'ER': 2.0, 'ES': 2.0, 'EU': 2.0, 'F': 1.47, 'FE': 2.0, 'FM': 2.0, 'FR': 2.0, 'GA': 1.87, 'GD': 2.0, 'GE': 2.0, 'H': 0.91, 'HE': 1.4, 'HF': 2.0, 'HG': 1.55, 'HO': 2.0, 'HS': 2.0, 'I': 1.98, 'IN': 1.93, 'IR': 2.0, 'K': 2.75, 'KR': 2.02, 'LA': 2.0, 'LI': 1.82, 'LR': 2.0, 'LU': 2.0, 'MD': 2.0, 'MG': 1.73, 'MN': 2.0, 'MO': 2.0, 'MT': 2.0, 'N': 1.97, 'NA': 2.27, 'NB': 2.0, 'ND': 2.0, 'NE': 1.54, 'NI': 1.63, 'NO': 2.0, 'NP': 2.0, 'O': 1.69, 'OS': 2.0, 'P': 2.1, 'PA': 2.0, 'PB': 2.02, 'PD': 1.63, 'PM': 2.0, 'PO': 2.0, 'PR': 2.0, 'PT': 1.72, 'PU': 2.0, 'RA': 2.0, 'RB': 2.0, 'RE': 2.0, 'RF': 2.0, 'RH': 2.0, 'RN': 2.0, 'RU': 2.0, 'S': 2.09, 'SB': 2.0, 'SC': 2.0, 'SE': 1.9, 'SG': 2.0, 'SI': 2.1, 'SM': 2.0, 'SN': 2.17, 'SR': 2.0, 'TA': 2.0, 'TB': 2.0, 'TC': 2.0, 'TE': 2.06, 'TH': 2.0, 'TI': 2.0, 'TL': 1.96, 'TM': 2.0, 'U': 1.86, 'V': 2.0, 'W': 2.0, 'XE': 2.16, 'Y': 2.0, 'YB': 2.0, 'ZN': 1.39, 'ZR': 2.0}
                }
 
+AA_RES_OHE = {
+    'ALA':  1,'GLY':  2,'ILE':  3,'LEU':  4,'MET':  5,
+    'VAL':  6,'PHE':  7,'TRP':  8,'TYR':  9,'ASN': 10,
+    'CYS': 11,'GLN': 12,'PRO': 13,'SER': 14,'THR': 15, 
+    'ASP': 16,'GLU': 17,'ARG': 18,'HIS': 19,'LYS': 20,                             
+    'UNK': 21
+}
+
 AA_OHE_BASIC = {
     'ALA': 1,'GLY': 1,'ILE': 1,'LEU': 1,'MET': 1,'VAL': 1,  # Alipathic apolar
     'PHE': 2,'TRP': 2,'TYR': 2,                             # Aromatic 
@@ -454,11 +462,13 @@ def encode_voxels(res_data, mode='ohe', OR_esm=None, esm_order=None):
 
     for i, _olfr in enumerate(res_data):
         _olfr_res = []
-
         # Only needed for esm
         if mode == 'esm': 
             if len(OR_esm) and len(esm_order):
-                esm = OR_esm[esm_order[i]] if mode == 'esm' else None
+                _or_name = esm_order[i].split('_')[0]
+                esm = OR_esm[_or_name] if mode == 'esm' else None
+                # esm = OR_esm[_olfr.split('_')[0]]
+                # print(_or_name)
             else:
                 raise ValueError("OR_esm and esm_order must be provided for 'esm' mode.")
 
@@ -477,7 +487,12 @@ def encode_voxels(res_data, mode='ohe', OR_esm=None, esm_order=None):
                 cls = AA_OHE_BASIC.get(residue, 6)
                 feature_vector = torch.zeros(len(set(AA_OHE_BASIC.values())) + 1, dtype=torch.float32)
                 feature_vector[cls] = 1
+            elif mode == 'res': 
+                feature_vector = torch.tensor([residue_number, AA_RES_OHE.get(residue)], dtype=torch.float32)
             elif mode == 'esm':
+                #TODO This is a hot fix . . .
+                if len(esm) <= residue_number-1: 
+                    continue
                 feature_vector = torch.tensor([0] + list(esm[residue_number - 1]), dtype=torch.float32)
             else:
                 raise ValueError(f"Unknown encoding mode: {mode}")
@@ -495,13 +510,15 @@ def voxelize_cavity(
     resolution=1, 
     encode_method='ohe', 
     vdw_radius=True, 
-    sparse_mode=False
+    sparse_mode=False,
+    reference_center=None,
+    cube_dim=32
 ):
     """
     Voxelizes 3D coordinates by creating a voxel grid representation.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     cavity_coords : dict or list, optional
         3D coordinates for cavities.
     residue_coords : dict or list, optional
@@ -518,16 +535,20 @@ def voxelize_cavity(
         Whether to expand each coordinate based on its van der Waals radius.
     sparse_mode : bool, default False
         If True, uses sparse voxel pooling (memory-efficient, no zero-padding).
+    reference_center : np.ndarray, shape (3,), optional
+        If provided, fixes the voxel cube center for all inputs.
+    cube_dim : float, optional
+        Edge length of the voxel cube (in Å). Required if reference_center is given.
 
-    Returns:
-    --------
+    Returns
+    -------
     tuple: 
         - List of voxel grids (or sparse dicts if sparse_mode=True)
         - Tuple of grid shape (X, Y, Z)
     """
     
     from collections import defaultdict
-
+    from collections import Counter
 
     # Convert dict to list if necessary
     cavity_coords = list(cavity_coords.values()) if isinstance(cavity_coords, dict) else (cavity_coords or [])
@@ -557,11 +578,18 @@ def voxelize_cavity(
 
     # Convert to numpy array for processing
     all_coords = np.array(all_coords)
-
-    # Compute grid boundaries
-    min_coords = np.min(all_coords, axis=0)
-    max_coords = np.max(all_coords, axis=0)
-    grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int) + 1
+    
+    # Fixed cube mode - Use a reference point for reproducibility 
+    if reference_center is not None and cube_dim is not None:
+        half = cube_dim / 2.0
+        min_coords = reference_center - half
+        max_coords = reference_center + half
+        grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int)
+    else:
+        # Default: per-OR dynamic cube
+        min_coords = np.min(all_coords, axis=0)
+        max_coords = np.max(all_coords, axis=0)
+        grid_shape = np.ceil((max_coords - min_coords) / resolution).astype(int) + 1
 
     # Determine vector length dynamically
     vector_length = len(residue_coords_class[0][0][3])
@@ -607,9 +635,29 @@ def voxelize_cavity(
                     if not vdw_radius:
                         voxel_dict[(grid_x, grid_y, grid_z)].append(features)
 
+            # pooled_voxels = {}
+            # for coord, feats in voxel_dict.items():
+            #     pooled_voxels[coord] = torch.stack(feats).mean(dim=0)
+            # Majority voting pooling instead of averaging pooling
             pooled_voxels = {}
             for coord, feats in voxel_dict.items():
-                pooled_voxels[coord] = torch.stack(feats).mean(dim=0)
+                if encode_method == 'res':
+                    # Cast all feature vectors to integer tuples (res_num, res_idx)
+                    tuples = []
+                    for f in feats:
+                        res_num = int(round(float(f[0].item())))
+                        res_idx = int(round(float(f[1].item())))
+                        tuples.append((res_num, res_idx))
+
+                    # Majority vote across residues in this voxel
+                    most_common, _ = Counter(tuples).most_common(1)[0]
+                    pooled_voxels[coord] = torch.tensor(
+                        [float(most_common[0]), float(most_common[1])],
+                        dtype=torch.float32
+                    )
+                else:
+                    # For continuous encodings (ohe, esm), average still makes sense
+                    pooled_voxels[coord] = torch.stack(feats).mean(dim=0)
 
             voxelized_data.append(pooled_voxels)
             
@@ -659,8 +707,14 @@ def voxelize_cavity(
                     grid_x = int((x - min_coords[0]) // resolution)
                     grid_y = int((y - min_coords[1]) // resolution)
                     grid_z = int((z - min_coords[2]) // resolution)
+                    
+                    # Clamp to valid range, Ensures doesn't index out of grid.
+                    grid_x = max(0, min(grid_x, voxel_grid.shape[0] - 1))
+                    grid_y = max(0, min(grid_y, voxel_grid.shape[1] - 1))
+                    grid_z = max(0, min(grid_z, voxel_grid.shape[2] - 1))
                     # voxel_grid[grid_x, grid_y, grid_z] = cavity_flag_vector 
                     # Only set the flag, preserving existing residue features
+                    # print(voxel_grid.shape, grid_x, grid_y, grid_z)
                     voxel_grid[grid_x, grid_y, grid_z][0] = 1.0
                 
             voxelized_data.append(voxel_grid)
@@ -861,3 +915,85 @@ def coords_to_voxel_pca(cavity_coords=None, residue_coords=None, resolution=1, n
     print("Explained variance ratio:", variance_ratio)
 
     return pca_df, variance_ratio
+
+from collections import defaultdict, Counter
+def sparse_voxel_consensus_res(voxel_dicts, threshold=0.0, use_bw=False):
+    """
+    Build a consensus residue mapping across multiple sparse voxel dictionaries.
+
+    Each voxel dictionary should come from voxelization using 
+    `vf.voxelize_cavity(..., encode_method='res', sparse_mode=True, ...)`, 
+    where keys are voxel coordinates (x, y, z) and values are either:
+        - tensor([residue_number, residue_index])         if use_bw=False
+        - (residue_number, residue_index, bw_number)      if use_bw=True
+
+    Parameters
+    ----------
+    voxel_dicts : list of dict
+        A list of sparse voxel dictionaries, typically generated via:
+        voxels, grid_shape = vf.voxelize_cavity(
+            cavity_coords=Cbc_cav_coords,
+            residue_coords=Cbc_res_coords,
+            resolution=1,
+            cube_dim=32,
+            reference_center=center_reference,
+            encode_method='res',
+            sparse_mode=True,
+            vdw_radius=False
+        )
+
+    threshold : float, optional (default=0.0)
+        Minimum fraction of input voxel dictionaries in which the consensus 
+        residue must appear at a given voxel coordinate for it to be included. 
+        For example, with `threshold=0.1`, the most frequent residue must 
+        occur in at least 10% of all voxel dictionaries.
+
+    use_bw : bool, optional (default=False)
+        If True, consensus is determined using residue index **and** BW number. 
+        The consensus result will be a tuple `(res_idx, bw_number)`.
+
+    Returns
+    -------
+    dict
+        A consensus mapping of voxel coordinates:
+        - If use_bw=False → {coord: (res_idx, freq_fraction)}
+        - If use_bw=True  → {coord: (res_idx, bw_number, freq_fraction)}
+
+        Voxels that do not meet the threshold are excluded.
+
+    Notes
+    -----
+    - Counts are summarized as frequency fraction for interpretability.
+    - Using `use_bw=True` is useful for directly labeling voxels with 
+      Ballesteros–Weinstein (BW) numbers in downstream visualization.
+    """
+    voxel_res_counts = defaultdict(list)
+
+    # Collect residue IDs (and BW if requested)
+    for d in voxel_dicts:
+        for coord, val in d.items():
+            if use_bw:
+                # expecting tuple (res_num, res_idx, bw_number)
+                res_idx = val[1]
+                bw = val[2]
+                voxel_res_counts[coord].append((res_idx, bw))
+            else:
+                # expecting tensor([res_num, res_idx])
+                res_idx = int(val[1])
+                voxel_res_counts[coord].append(res_idx)
+
+    num_dicts = len(voxel_dicts)
+    consensus = {}
+
+    # Compute consensus
+    for coord, res_list in voxel_res_counts.items():
+        counter = Counter(res_list)
+        most_common, count = counter.most_common(1)[0]
+        if count / num_dicts >= threshold:
+            if use_bw:
+                res_idx, bw = most_common
+                consensus[coord] = (res_idx, np.round(count / num_dicts, 3), bw)
+            else:
+                consensus[coord] = (most_common, np.round(count / num_dicts, 3))
+
+    return consensus

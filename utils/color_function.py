@@ -27,58 +27,58 @@ def get_color(colorscale_name, loc):
         
 
 
-def get_continuous_colors(values, colormap="RdBu_r", midpoint=None):
+from matplotlib import cm, colors as mcolors
+import numpy as np
+import pandas as pd
+
+def get_continuous_colors(values, colormap="RdBu_r", midpoint=None, color_min=None, color_max=None):
     """
-    Assigns colors to a list or dictionary of values using a continuous colorscale.
+    Assign colors to values using a continuous colormap, handling NaNs and skewed data.
 
     Parameters:
-    - values (list, dict, or Series): A dictionary {index: value}, Pandas Series, or a list of values.
-    - colormap (str): A Matplotlib colormap name (e.g., 'RdBu_r', 'viridis', 'coolwarm').
-    - midpoint (float, optional): The value to center the colormap around. If None, uses the median.
+    - values: list, np.array, or pd.Series of numeric values (NaNs allowed)
+    - colormap: matplotlib colormap string
+    - midpoint: float, center of the colormap (e.g., 0 for diverging maps)
+    - color_min: float, optional user-defined minimum value for colormap
+    - color_max: float, optional user-defined maximum value for colormap
 
     Returns:
-    - dict: A dictionary mapping indices (or positions if input is a list) to colors in hex format.
+    - dict: mapping index -> hex color
     """
-    # Convert Pandas Series to dictionary if applicable
-    if hasattr(values, "to_dict"):
-        values = values.to_dict()
-
-    # Extract indices and values
-    if isinstance(values, dict):
-        indices, vals = list(values.keys()), np.array(list(values.values()))
+    # Convert to array
+    if isinstance(values, (pd.Series, list)):
+        indices = np.arange(len(values))
+        vals = np.array(values, dtype=float)
+    elif isinstance(values, np.ndarray):
+        indices = np.arange(len(values))
+        vals = values.astype(float)
     else:
-        indices, vals = range(len(values)), np.array(values)
+        raise ValueError("Unsupported input type for values.")
 
-    # Handle edge case where all values are the same
-    if np.all(vals == vals[0]):
-        return {idx: mcolors.to_hex(cm.get_cmap(colormap)(0.5)) for idx in indices}
+    # Handle NaNs
+    mask = ~np.isnan(vals)
+    vals_masked = vals[mask]
 
-    # Define midpoint if not provided (default: median)
+    # Determine colormap bounds
+    vmin = color_min if color_min is not None else np.min(vals_masked)
+    vmax = color_max if color_max is not None else np.max(vals_masked)
+    
+    # Determine midpoint
     if midpoint is None:
-        midpoint = np.median(vals)
+        midpoint = 0  # default center for diverging importance
 
-    # Determine min and max values
-    min_val, max_val = np.min(vals), np.max(vals)
-
-    # Adjust the color scale if all values are on one side of the midpoint
-    if min_val >= midpoint:  # All values are positive
-        max_val = max(max_val, abs(midpoint))  # Ensure symmetry
-        min_val = -max_val
-    elif max_val <= midpoint:  # All values are negative
-        min_val = min(min_val, -abs(midpoint))  # Ensure symmetry
-        max_val = -min_val
-
-    # Normalize values between [0, 1] while keeping midpoint centered
-    if min_val < midpoint < max_val:
-        norm = mcolors.TwoSlopeNorm(vmin=min_val, vcenter=midpoint, vmax=max_val)
+    # Use TwoSlopeNorm if midpoint is within vmin/vmax, else simple Normalize
+    if vmin < midpoint < vmax:
+        norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=midpoint, vmax=vmax)
     else:
-        norm = mcolors.Normalize(vmin=min_val, vmax=max_val)
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
-    # Get the colormap and apply normalization
+    # Apply colormap
     cmap = cm.get_cmap(colormap)
-    colors = {idx: mcolors.to_hex(cmap(norm(value))) for idx, value in zip(indices, vals)}
+    colors = np.full(vals.shape, "#D3D3D3", dtype=object)  # default black for NaN
+    colors[mask] = [mcolors.to_hex(cmap(norm(v))) for v in vals_masked]
 
-    return colors
+    return {idx: color for idx, color in zip(indices, colors)}
 
 def distinct_colors(label_list=None, category='tab10', custom_color=None, random_state=0, form='dict', num_colors=None):
     """
@@ -230,18 +230,18 @@ def generate_faded_shades(hex_color, shades, lightness_range=(0.3, 0.9)):
 
     # Generate colors
     faded_colors = []
-    for i, lv in enumerate(lightness_values):
-        if i == 0:
-            faded_colors.append(f'#{hex_color_clean}')
-        else:
-            r_f, g_f, b_f = colorsys.hls_to_rgb(h, lv, s)
-            hex_faded = '#{0:02x}{1:02x}{2:02x}'.format(int(r_f*255), int(g_f*255), int(b_f*255))
-            faded_colors.append(hex_faded)
+    for lv in lightness_values:
+        # You may want to reduce saturation slightly to keep it from looking neon
+        r_f, g_f, b_f = colorsys.hls_to_rgb(h, lv, s * 0.9)
+        hex_faded = '#{0:02x}{1:02x}{2:02x}'.format(int(r_f*255), int(g_f*255), int(b_f*255))
+        faded_colors.append(hex_faded)
 
     return dict(zip(keys, faded_colors)) if keys else faded_colors
 
 
-from plotly.validators.scatter.marker import SymbolValidator
+# from plotly.validators.scatter.marker import SymbolValidator
+from plotly.validator_cache import ValidatorCache
+
 import random
 
 def distinct_shapes(label_list=None, random_state=0, form='dict', num_shapes=None):
@@ -262,8 +262,9 @@ def distinct_shapes(label_list=None, random_state=0, form='dict', num_shapes=Non
     random.seed(random_state)
 
     # Get all available marker symbols in Plotly
+    SymbolValidator = ValidatorCache.get_validator("scatter.marker", "symbol")
     all_shapes = [s for i, s in enumerate(SymbolValidator().values) if i % 3 == 2]  
-
+    
     # Separate main shapes (without '-') and sub-shapes (with '-')
     main_shapes = [s for s in all_shapes if '-' not in s]
     sub_shapes = [s for s in all_shapes if '-' in s]
@@ -311,3 +312,12 @@ def scale(values, reverse=False, factor = 1, scale_between = [1,0]):
     if reverse:
         scaled_values = [1 - val for val in scaled_values]
     return scaled_values
+
+def hex_contrast(hex_color: str) -> str:
+    """Return 'dark' or 'bright' for a given hex color."""
+    rgb = mcolors.hex2color(hex_color)  # values in [0,1]
+    r, g, b = [int(c*255) for c in rgb]
+
+    # luminance formula
+    luminance = 0.299*r + 0.587*g + 0.114*b
+    return "bright" if luminance > 186 else "dark"

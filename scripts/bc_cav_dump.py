@@ -47,7 +47,7 @@ import BindingCavity_functions as bc
 import pyKVFinder
 from sklearn.cluster import DBSCAN
 
-
+# From AF2
 base_dir = "/mnt/data2/Justice/AF_files/AF_tmaligned_pdb/"
 pdb_files = [os.path.join(base_dir, sub_dir) for sub_dir in os.listdir(base_dir)] 
 
