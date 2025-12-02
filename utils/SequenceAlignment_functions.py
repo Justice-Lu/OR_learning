@@ -669,32 +669,51 @@ def grantham_mds_projection(sequences, aggregate='mean', gap_handling='ignore', 
     return mds.fit_transform(dist_matrix), dist_matrix
 
 
-
-def interpolate_bw(position, known_positions):
+def interpolate_bw(position, known_positions, alignment_seq):
     """
-    Infer the BW numbering of a given residue position based on known BW positions.
+    Infer the BW numbering of a given residue alignment index based on known BW positions,
+    accounting for gaps in the alignment.
 
-    Parameters:
-    - position: Residue position in the sequence (integer).
-    - known_positions: Dictionary of known BW positions {residue index (str): BW number (str)}.
+    Parameters
+    ----------
+    position : int
+        Alignment index of the residue (0-based or 1-based, consistent with known_positions).
+    known_positions : dict
+        Known BW reference positions {alignment_index: BW_number}.
+        Example: {117: 1.50, 149: 2.50, 205: 3.50, 233: 4.50, 278: 45.50, ...}
+    alignment_seq : str
+        The aligned sequence (with '-' for gaps).
 
-    Returns:
-    - Interpolated BW number (float).
+    Returns
+    -------
+    float
+        Interpolated BW number.
     """
-    # Convert residue positions to integers and BW numbers to floats
-    # known_positions = {int(k[1:]): float(v) for k, v in known_positions.items()}
-
     # Get sorted residue indices
-    sorted_positions = sorted(known_positions.keys())
+    # sorted_positions = sorted(known_positions.keys())
 
-    # Find the closest midpoint reference (X.50)
+    # # Find the closest midpoint reference (X.50)
+    # closest_idx = min(sorted_positions, key=lambda x: abs(x - position))
+    # closest_bw = known_positions[closest_idx]
+
+    # # Calculate offset from the closest BW reference
+    # residue_offset = position - closest_idx
+    # inferred_bw = float(closest_bw) + (residue_offset * 0.01)
+
+    sorted_positions = sorted(known_positions.keys())
+    # Find nearest reference BW anchor
     closest_idx = min(sorted_positions, key=lambda x: abs(x - position))
     closest_bw = known_positions[closest_idx]
 
-    # Calculate offset from the closest BW reference
-    residue_offset = position - closest_idx
-    inferred_bw = float(closest_bw) + (residue_offset * 0.01)
+    # Compute residue offset accounting for gaps (count only residues, not alignment columns)
+    if position > closest_idx:
+        offset = sum(1 for aa in alignment_seq[closest_idx:position-1] if aa != "-")
+    elif position < closest_idx:
+        offset = -sum(1 for aa in alignment_seq[position:closest_idx-1] if aa != "-")
+    else:
+        offset = 0
 
+    inferred_bw = float(closest_bw) + (offset * 0.01)
     return round(inferred_bw, 2)
 
 # def map_residues_to_bw(query_residues, ref_seq_name, alignment, target_seq_name, bw_positions=None):
@@ -805,28 +824,64 @@ def map_residues_to_bw(residue_list, alignment, target_seq_name, bw_positions):
     - Dictionary mapping target sequence residues to their BW numbers {residue: BW position}.
     """
 
+
+    # ref_seq = alignment[ref_seq_name]
+    
+    # # Convert BW positions to numeric residue indices
+    # bw_residue_positions = {int(re.sub(r"\D", "", res)): float(bw) for res, bw in bw_positions.items()}
+
+    # # New mapping of aligned indices to BW numbers
+    # updated_bw_positions = {}
+
+    # ref_res_index = 0  # Tracks residue position in ref sequence (ignoring gaps)
+    # aligned_index = 0  # Tracks residue position in alignment
+
+    # # Iterate through the alignment
+    # for i, ref_res in enumerate(ref_seq):
+    #     if ref_res != "-":  
+    #         ref_res_index += 1  
+        
+    #     if any(seq[i] != "-" for seq in alignment.values()):  
+    #         # If any sequence has a residue at this position, count it as an aligned position
+    #         aligned_index += 1  
+
+    #     # If this ref_res_index matches a known BW position, update it to aligned_index
+    #     if ref_res_index in bw_residue_positions:
+    #         updated_bw_positions[aligned_index] = bw_residue_positions[ref_res_index]  
+
+    # return updated_bw_positions
+
     target_seq = alignment[target_seq_name]
     
-    # **Preprocess**: Create a mapping of residue numbers to original labels
-    residue_num_to_label = {int(re.sub(r"\D", "", res)): res for res in residue_list}
+    # # **Preprocess**: Create a mapping of residue numbers to original labels
+    # residue_num_to_label = {int(re.sub(r"\D", "", res)): res for res in residue_list}
 
-    target_res_index = 0  # Track actual residue index in target sequence (ignoring gaps)
-    aligned_index = 0  # Track aligned position
+    # target_res_index = 0  # Track actual residue index in target sequence (ignoring gaps)
+    # aligned_index = 0  # Track aligned position
     residue_to_bw = {}
 
-    for i, target_res in enumerate(target_seq):
-        if target_res != "-":
-            target_res_index += 1  # Increment actual residue count
-        
-        if any(seq[i] != "-" for seq in alignment.values()):  
-            aligned_index += 1  # Count as an aligned position if any sequence has a residue here
+    # Map residue number → residue label (e.g. 104: 'H104')
+    residue_num_to_label = {int(re.sub(r"\D", "", res)): res for res in residue_list}
 
-        # **Check if target_res_index is in the residue list set (O(1) lookup)**
-        if target_res_index in residue_num_to_label:
-            inferred_bw = interpolate_bw(aligned_index, bw_positions)
-            residue_label = re.sub(r"\D", "", residue_num_to_label[target_res_index])
-            # residue_to_bw[residue_label] = inferred_bw  
-            residue_to_bw[f"{target_res}{residue_label}"] = f'{inferred_bw:.2f}'
+    # Build mapping of residue number → alignment index (ignore gaps)
+    res_idx = 0
+    resnum_to_alnidx = {}
+    for aln_idx, aa in enumerate(target_seq):
+        if aa != "-":
+            res_idx += 1
+            if res_idx in residue_num_to_label:
+                resnum_to_alnidx[res_idx] = aln_idx
+
+
+    # Now map residues directly
+    for res_num, aln_idx in resnum_to_alnidx.items():
+        inferred_bw = interpolate_bw(aln_idx, bw_positions, target_seq)
+        if inferred_bw is not None:
+            residue_label = residue_num_to_label[res_num]
+            # aa = re.sub(r"\d+", "", residue_label)  # extract amino acid letter
+            aa = target_seq[aln_idx]
+            residue_to_bw[f"{aa}{res_num}"] = f"{inferred_bw:.2f}"
+            
     return residue_to_bw
 
 

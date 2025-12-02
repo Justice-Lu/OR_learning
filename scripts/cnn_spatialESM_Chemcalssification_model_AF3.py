@@ -16,12 +16,29 @@ import voxel_functions as vf
 
 # Load pS6-IP data 
 ps6_df = pd.read_csv('/mnt/data2/Justice/OR_learning/files/pS6IP/pS6IP_MASTER_HL_Annotated_2025.csv', index_col = 0) 
+ps6_df.odor_category = ps6_df.odor_category.astype(pd.CategoricalDtype(categories=['Alcohols', 'Aldehydes', 'Ketones','CarboxylicAcids', 'Esters',
+                                                                                   'Tiglates', 'Pyradine', 'Thiazole', 'Sulfurous', 'Others'], ordered=True))
 # Subset for concentration in percentages 
 ps6_df = ps6_df[ps6_df.concentration.str.contains('p')]
 ps6_df = ps6_df.sort_values(['Family', 'DL_OR', 'odor_category', 'odor', 'concentration', 'FDR', 'activation_zscore']).dropna()
 
 # IMPORTANT DROPPING OUT ODOR CATEGORY OF 'OTHERS'
 ps6_df = ps6_df[ps6_df.odor_category != 'Others']
+
+# Build odor category vocab
+ODOR_CATEGORIES = ps6_df.odor_category.sort_values().unique()
+ODORS = [_odor for _cat in ODOR_CATEGORIES for _odor in ps6_df[ps6_df.odor_category == _cat].dropna().sort_values(['cid_mw', 'odor']).odor.unique()]
+ODOR_TO_CAT = dict(zip(ps6_df.odor, ps6_df.odor_category))
+CATEGORY_COLORS = cf.distinct_colors(ODOR_CATEGORIES, category = 'tab10')
+ODOR_COLORS = {}
+for _category in ODOR_CATEGORIES:     
+    ODOR_COLORS.update(cf.generate_faded_shades(CATEGORY_COLORS[_category],
+                                     list(ps6_df[ps6_df.odor_category == _category].sort_values(['cid_mw', 'odor']).odor.unique()), 
+                                     (0.4,0.8)))
+    
+ODOR_TO_IDX = {cat: i for i, cat in enumerate(ODORS)}
+IDX_TO_ODOR = {i: cat for i, cat in enumerate(ODORS)}
+NUM_ODORS = len(ODORS)
 
 # Subset for ORs in voxel ORs.  
 # unique_ORs = np.unique([_keys.split('_')[0] for _keys in list(Cbc_res_coords)])
@@ -39,10 +56,10 @@ Cbc_res_coords = pd.read_pickle('/mnt/data2/Justice/OR_learning/files/binding_ca
 
 # For troubleshooting, using only positive activation_zscore 
 # Take x number of none activating ORs proportion to activated ORs. 
+# sample_ORs = random.sample(list(zero_ps6_df.DL_OR.unique()), 
+#                            len(list(activated_ps6_df.DL_OR.unique())) // 6) + list(activated_ps6_df.DL_OR.unique())
 
-sample_ORs = random.sample(list(zero_ps6_df.DL_OR.unique()), 
-                           len(list(activated_ps6_df.DL_OR.unique())) // 6) + list(activated_ps6_df.DL_OR.unique())
-# sample_ORs = list(activated_ps6_df.DL_OR.unique()) # No non-activated ORs
+sample_ORs = list(activated_ps6_df.DL_OR.unique()) # No non-activated ORs
 sample_ORs = [_ORs.lower() for _ORs in sample_ORs]
 
 Cbc_cav_coords = {_key: Cbc_cav_coords[_key] for _key in list(Cbc_cav_coords) if _key.split('_')[0].lower() in sample_ORs}
@@ -52,8 +69,8 @@ Cbc_res_coords = {_key: Cbc_res_coords[_key] for _key in list(Cbc_res_coords) if
 # Cbc_res_coords = {_key: Cbc_res_coords[_key] for _key in list(Cbc_res_coords)[:100]}
 
 # Taking only x prediction of each AF3
-Cbc_cav_coords = {_key: Cbc_cav_coords[_key] for _key in list(Cbc_cav_coords) if _key.split('_')[1] in (['0','1','2'])}
-Cbc_res_coords = {_key: Cbc_res_coords[_key] for _key in list(Cbc_res_coords) if _key.split('_')[1] in (['0','1','2'])}
+# Cbc_cav_coords = {_key: Cbc_cav_coords[_key] for _key in list(Cbc_cav_coords) if _key.split('_')[1] in (['0','1','2','3'])}
+# Cbc_res_coords = {_key: Cbc_res_coords[_key] for _key in list(Cbc_res_coords) if _key.split('_')[1] in (['0','1','2','3'])}
 print('Cbc coords files loaded. . .')
 
 
@@ -173,18 +190,6 @@ def inflate_voxels(voxel_tensor, or_index_map, ps6_df,
 
 
 # ---------------- Dataset ----------------
-    
-# Build odor category vocab
-ODOR_CATEGORIES = sorted(ps6_df.odor_category.unique())
-ODORS = sorted(ps6_df.odor.unique())
-ODOR_TO_CAT = dict(zip(ps6_df.odor, ps6_df.odor_category))
-
-ODOR_TO_IDX = {cat: i for i, cat in enumerate(ODORS)}
-IDX_TO_ODOR = {i: cat for i, cat in enumerate(ODORS)}
-NUM_ODORS = len(ODORS)
-
-ODOR_COLOR = cf.distinct_colors(ps6_df.odor_category.unique(), category='tab10')
-
 
 class ORVoxelDataset(Dataset):
     def __init__(self, voxel_tensor, or_index_map, ps6_df, score_threshold=2.0):
@@ -223,7 +228,10 @@ class ORVoxelDataset(Dataset):
     def __getitem__(self, idx):
         voxel = self.voxel_tensor[self.or_indices[idx]]
         target = self.targets[idx]
-        return voxel, target
+
+        voxel_names = self.or_names[idx]
+
+        return voxel, target, voxel_names
     
     
 # ---------------- Model ----------------
@@ -277,7 +285,7 @@ class OROdorCNN(nn.Module):
 # ---------------- Training Loop ----------------
 def train_model(model, train_loader, val_loader, device, run_name,
                 lr=1e-3, max_epochs=100, min_epoch=40, patience=10,
-                multi_label=False, threshold=0.4):
+                multi_label=True, threshold=0.4):
     """
     Train model for single-label (multi-class) or multi-label classification,
     while keeping all original validation plots.
@@ -296,7 +304,9 @@ def train_model(model, train_loader, val_loader, device, run_name,
         # -------- Training --------
         model.train()
         total_train_loss = 0
-        for vox, y in train_loader:
+        train_labels = []
+        train_voxel_names = []
+        for vox, y, voxel_name in train_loader:
             vox, y = vox.to(device), y.to(device)
             optimizer.zero_grad()
             logits = model(vox)
@@ -304,26 +314,36 @@ def train_model(model, train_loader, val_loader, device, run_name,
             loss.backward()
             optimizer.step()
             total_train_loss += loss.item()
+            
+            train_labels.append(y.cpu().numpy())
+            train_voxel_names.extend(voxel_name)
+            
         avg_train_loss = total_train_loss / len(train_loader)
         train_losses.append(avg_train_loss)
+        
+        train_labels = np.vstack(train_labels) if multi_label else np.concatenate(train_labels)
 
         # -------- Validation --------
         model.eval()
         total_val_loss = 0
-        all_probs, all_labels = [], []
+        val_probs, val_labels = [], []
+        val_voxel_names = []
         with torch.no_grad():
-            for vox, y in val_loader:
+            for vox, y, voxel_name in val_loader:
                 vox, y = vox.to(device), y.to(device)
                 logits = model(vox)
                 loss = loss_fn(logits, y)
                 total_val_loss += loss.item()
 
                 probs = torch.sigmoid(logits) if multi_label else torch.softmax(logits, dim=1)
-                all_probs.append(probs.cpu().numpy())
-                all_labels.append(y.cpu().numpy())
+                val_probs.append(probs.cpu().numpy())
+                val_labels.append(y.cpu().numpy())
+                
+                val_voxel_names.extend(voxel_name)
 
-        val_probs = np.vstack(all_probs)
-        val_labels = np.vstack(all_labels) if multi_label else np.concatenate(all_labels)
+
+        val_probs = np.vstack(val_probs)
+        val_labels = np.vstack(val_labels) if multi_label else np.concatenate(val_labels)
         avg_val_loss = total_val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
 
@@ -361,9 +381,15 @@ def train_model(model, train_loader, val_loader, device, run_name,
     np.save(os.path.join(run_name, "train_losses.npy"), np.array(train_losses))
     np.save(os.path.join(run_name, "val_losses.npy"), np.array(val_losses))
     np.save(os.path.join(run_name, "val_accs.npy"), np.array(val_accs))
+    
+    np.save(os.path.join(run_name, "train_labels.npy"), train_labels)
     np.save(os.path.join(run_name, "val_labels.npy"), val_labels)
+    np.save(os.path.join(run_name, "val_preds.npy"), val_preds)
     np.save(os.path.join(run_name, "val_probs.npy"), val_probs)
-
+    
+    np.save(os.path.join(run_name, "train_voxel_names.npy"), train_voxel_names)
+    np.save(os.path.join(run_name, "val_voxel_names.npy"), val_voxel_names)
+    
     # -------- Confusion Matrix --------
     if multi_label:
         # Compute per-class metrics
@@ -381,8 +407,8 @@ def train_model(model, train_loader, val_loader, device, run_name,
         plt.title("Per-class Confusion Counts")
         plt.xlabel("Odor Category")
         plt.ylabel("Metric")
-        plt.tight_layout()
-        plt.show()
+        plt.savefig(os.path.join(run_name, "confusion_matrix.png"))
+        plt.close()
         
     else:
         val_label_names = [IDX_TO_ODOR.get(i) for i in val_labels]
@@ -492,7 +518,7 @@ def train_model(model, train_loader, val_loader, device, run_name,
         mean_tpr_cat = np.mean(tprs_cat, axis=0)
         mean_tpr_cat[-1] = 1.0
         mean_auc_cat = auc(mean_fpr, mean_tpr_cat)
-        plt.plot(mean_fpr, mean_tpr_cat, color=ODOR_COLOR[cat], lw=3,
+        plt.plot(mean_fpr, mean_tpr_cat, color=CATEGORY_COLORS[cat], lw=3,
                  label=f"{cat} Avg (AUC={mean_auc_cat:.2f})"
                  )
         
@@ -517,6 +543,145 @@ def train_model(model, train_loader, val_loader, device, run_name,
     plt.close()
 
     return best_model_path, train_losses, val_losses, val_accs
+
+
+def evaluate_model(model, test_loader, device, run_name,
+                   multi_label=True, threshold=0.4, model_path=None):
+    """
+    Evaluate a trained model on a test set. If model_path is provided, load weights from it.
+    Saves test_preds, test_probs, test_labels, test_voxel_names and common metric plots/reports.
+    """
+    import os
+    from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_auc_score, roc_curve, auc
+    from sklearn.preprocessing import label_binarize
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    if model_path is not None:
+        state = torch.load(model_path, map_location=device)
+        model.load_state_dict(state)
+
+    model.to(device)
+    model.eval()
+
+    loss_fn = nn.BCEWithLogitsLoss() if multi_label else nn.CrossEntropyLoss()
+
+    test_probs, test_labels = [], []
+    test_voxel_names = []
+    with torch.no_grad():
+        for vox, y, voxel_name in test_loader:
+            vox, y = vox.to(device), y.to(device)
+            logits = model(vox)
+            probs = torch.sigmoid(logits) if multi_label else torch.softmax(logits, dim=1)
+            test_probs.append(probs.cpu().numpy())
+            test_labels.append(y.cpu().numpy())
+            test_voxel_names.extend(voxel_name)
+
+    test_probs = np.vstack(test_probs)
+    test_labels = np.vstack(test_labels) if multi_label else np.concatenate(test_labels)
+
+    if multi_label:
+        test_preds = (test_probs > threshold).astype(int)
+        # Ensure integer dtype
+        test_labels = test_labels.astype(int)
+        test_preds = test_preds.astype(int)
+        # Use macro F1 for multi-label summary
+        try:
+            test_f1 = f1_score(test_labels, test_preds, average='macro', zero_division=0)
+        except Exception:
+            test_f1 = None
+        print(f"Test F1 (macro): {test_f1}")
+    else:
+        # If labels are multi-hot vectors, convert to single class indices
+        if test_labels.ndim > 1:
+            try:
+                test_labels = np.argmax(test_labels, axis=1)
+            except Exception:
+                # fallback: flatten
+                test_labels = test_labels.ravel()
+        test_preds = np.argmax(test_probs, axis=1)
+        test_labels = test_labels.astype(int)
+        test_preds = test_preds.astype(int)
+        test_acc = accuracy_score(test_labels, test_preds)
+        print(f"Test Accuracy: {test_acc:.4f}")
+
+    # Save arrays
+    np.save(os.path.join(run_name, "test_probs.npy"), test_probs)
+    np.save(os.path.join(run_name, "test_preds.npy"), test_preds)
+    np.save(os.path.join(run_name, "test_labels.npy"), test_labels)
+    np.save(os.path.join(run_name, "test_voxel_names.npy"), np.array(test_voxel_names))
+
+    # Classification report and confusion matrix (handle multi-label and single-label)
+    try:
+        # Save classification report for both multi-label and single-label
+        report = classification_report(test_labels, test_preds, target_names=ODORS, zero_division=0)
+        with open(os.path.join(run_name, "test_classification_report.txt"), "w") as f:
+            f.write(report)
+
+        if multi_label:
+            # Compute per-class confusion counts (TP, FP, FN, TN)
+            per_class_tp = np.sum((test_preds == 1) & (test_labels == 1), axis=0)
+            per_class_fp = np.sum((test_preds == 1) & (test_labels == 0), axis=0)
+            per_class_fn = np.sum((test_preds == 0) & (test_labels == 1), axis=0)
+            per_class_tn = np.sum((test_preds == 0) & (test_labels == 0), axis=0)
+
+            metrics = np.stack([per_class_tp, per_class_fp, per_class_fn, per_class_tn], axis=0)
+            plt.figure(figsize=(14, 6))
+            sns.heatmap(metrics, annot=True, fmt='d',
+                        xticklabels=ODORS,
+                        yticklabels=["TP", "FP", "FN", "TN"],
+                        cmap="Blues")
+            plt.title("Per-class Confusion Counts (Test)")
+            plt.xlabel("Odor Category")
+            plt.ylabel("Metric")
+            plt.savefig(os.path.join(run_name, "test_confusion_matrix.png"))
+            plt.close()
+        else:
+            # Single-label confusion matrix with odor names
+            true_names = [IDX_TO_ODOR.get(int(i), str(i)) for i in test_labels]
+            pred_names = [IDX_TO_ODOR.get(int(i), str(i)) for i in test_preds]
+            conf = confusion_matrix(true_names, pred_names, labels=ODORS)
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(conf, annot=True, fmt='d', cmap="Blues", xticklabels=ODORS, yticklabels=ODORS)
+            plt.title("Test Confusion Matrix")
+            plt.xlabel("Predicted")
+            plt.ylabel("True")
+            plt.tight_layout()
+            plt.savefig(os.path.join(run_name, "test_confusion_matrix.png"))
+            plt.close()
+    except Exception as e:
+        print(f"Could not create classification report/confusion matrix: {e}")
+
+    # ROC-AUC overall
+    try:
+        if multi_label:
+            y_true_bin = test_labels
+        else:
+            y_true_bin = label_binarize(test_labels, classes=range(NUM_ODORS))
+
+        overall_auc = roc_auc_score(y_true_bin, test_probs, average="macro")
+        print(f"Test ROC-AUC (macro): {overall_auc:.4f}")
+        # Save overall ROC plot (macro)
+        if multi_label:
+            test_preds_class = np.argmax(test_probs, axis=1)
+            y_correct = (test_preds_class == test_labels).astype(int)
+            y_score = np.max(test_probs, axis=1)
+            fpr_overall, tpr_overall, _ = roc_curve(y_correct, y_score)
+            roc_auc_overall = auc(fpr_overall, tpr_overall)
+            plt.figure(figsize=(6,6))
+            plt.plot(fpr_overall, tpr_overall, lw=2, label=f'Overall Accuracy ROC (AUC={roc_auc_overall:.2f})')
+            plt.plot([0,1],[0,1],'k--')
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title("Test Overall Accuracy ROC")
+            plt.legend(loc="lower right")
+            plt.tight_layout()
+            plt.savefig(os.path.join(run_name, "test_roc_overall_accuracy.png"))
+            plt.close()
+    except Exception as e:
+        print("Could not compute ROC-AUC for test set:", e)
+
+    return test_probs, test_preds, test_labels
 
 
 # ---------- Prepare Data ----------
@@ -645,22 +810,46 @@ def main():
 
         # ---------------- Train/Val Split ----------------
         # Binary stratification label: Activated OR (1) vs Non-activated (0)
-        labels = [
-            # Assuming ps6_df is already filtered by activation_zscore
-            0 if or_name not in activated_ps6_df.DL_OR.values else 1
-            for or_name in or_ids
-        ]
+        # Build labels aligned to or_ids (use cleaned OR name before underscore)
+        activated_set = set(activated_ps6_df.DL_OR.str.lower().values)
+        labels = []
+        for or_name in or_ids:
+            clean_or = or_name.split('_')[0].lower()
+            labels.append(1 if clean_or in activated_set else 0)
+        labels = np.array(labels)
 
-        train_ORs, val_ORs = train_test_split(
+        if labels.shape[0] != len(or_ids):
+            raise ValueError(f"Label length {labels.shape[0]} does not match number of ORs {len(or_ids)}")
+
+        # train_ORs, val_ORs = train_test_split(
+        #     or_ids,
+        #     test_size=0.2,
+        #     stratify=labels,   # stratify by binary activation flag
+        #     random_state=0
+        # )
+        
+        # Train split
+        train_ORs, remain_ORs = train_test_split(
             or_ids,
-            test_size=0.1,
-            stratify=labels,   # stratify by binary activation flag
+            test_size=0.3,  # 30% for val + test
+            stratify=labels,   # Important: keeps odors balanced
+            random_state=0
+        )
+
+        # Remaining Val, test split 
+        # For stratification on the remain_ORs split, extract corresponding labels
+        labels_remain = [labels[or_ids.index(or_id)] for or_id in remain_ORs]
+        val_ORs, test_ORs = train_test_split(
+            remain_ORs,
+            test_size=0.5,
+            stratify=labels_remain,
             random_state=0
         )
 
         # Build index maps for train and val ORs
         train_index_map = {or_id: or_index_map[or_id] for or_id in train_ORs}
         val_index_map = {or_id: or_index_map[or_id] for or_id in val_ORs}
+        test_index_map = {or_id: or_index_map[or_id] for or_id in test_ORs}
 
         # Inflate training voxels only if augmentation is active
         if param_dict["augment_noise"] > 0 or param_dict["augment_mask"] > 0:
@@ -679,15 +868,22 @@ def main():
         # Validation set (no augmentation)
         voxel_tensor_val = voxel_tensor
         val_index_map = val_index_map
+        
+        voxel_tensor_test = voxel_tensor
+        test_index_map = test_index_map
 
         # Build datasets
         train_dataset = ORVoxelDataset(voxel_tensor_train, train_index_map, ps6_df)
         val_dataset = ORVoxelDataset(voxel_tensor_val, val_index_map, ps6_df)
+        test_dataset = ORVoxelDataset(voxel_tensor_test, test_index_map, ps6_df)
+
         
         train_loader = DataLoader(train_dataset, 
                                   batch_size=param_dict["batch_size"], 
                                   shuffle=True)
         val_loader   = DataLoader(val_dataset, 
+                                  batch_size=param_dict["batch_size"])
+        test_loader  = DataLoader(test_dataset, 
                                   batch_size=param_dict["batch_size"])
 
         # FOR DEBUGGING 
@@ -706,7 +902,7 @@ def main():
             pool_type=param_dict['pooling']
         )
 
-        train_model(
+        best_model_path, train_losses, val_losses, val_accs = train_model(
             model, train_loader, val_loader, device, run_name,
             lr=param_dict['lr'],
             max_epochs=args.max_epoch,
@@ -715,6 +911,15 @@ def main():
             threshold=param_dict['multi_valprob_threshold'],
             multi_label=param_dict['multi_label']
         )
+
+        # Run final evaluation on test set using the saved best model
+        try:
+            evaluate_model(model, test_loader, device, run_name,
+                           multi_label=param_dict['multi_label'],
+                           threshold=param_dict['multi_valprob_threshold'],
+                           model_path=best_model_path)
+        except Exception as e:
+            print(f"Test evaluation failed for run {run_name}: {e}")
         
 if __name__ == "__main__":
     main()

@@ -7,6 +7,10 @@ __pycache__
 .ipynb_checkpoints/
 notebooks/old/
 files/
+!files/binding_cavity/AF3_center_reference.npy
+!files/binding_cavity/canonical_bc_coords.npy
+!canonical_bc_coords.npy
+# !*/
 
 output*
 output/bc_voxel
