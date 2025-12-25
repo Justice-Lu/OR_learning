@@ -396,6 +396,381 @@ def visualize_voxel_grid(voxel_data,
     fig = _plotly_blank_style(fig)
     return fig
 
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial import ConvexHull
+from scipy.interpolate import splprep, splev
+
+def plt_voxel_slices(
+        protein_points,
+        protein_res,
+        imp_points,
+        imp_values,
+        imp_max=None, imp_min=None, 
+        angles=[45, 135],
+        slice_axis="z",
+        slice_thickness=5,
+        n_slices=1,
+        slice_position=None, 
+        cmap="RdBu_r",
+        protein_color="lightgray",
+        protein_size=30, protein_alpha=0.3, 
+        imp_size=20,
+        label_residues=False,
+        show_slice_planes=True
+    ):
+    """
+        Visualize rotated orthogonal slices of a protein point cloud and corresponding
+        importance/voxel values in both 3D and 2D.
+
+        This function produces two separate figures:
+        
+        1. **fig3d** — A figure containing one 3D subplot per rotation angle.
+        Each subplot shows the rotated protein point cloud and (optionally)
+        the slice planes indicating where 2D projections will be taken.
+
+        2. **fig2d** — A figure containing `len(angles) × n_slices` 2D subplots.
+        Each row corresponds to a rotation angle, and each column corresponds
+        to a slice position.  
+        Every subplot shows:
+        - The projected protein points inside the slice
+        - The projected importance/voxel points
+        - (Optional) labels for protein residues, plotted once per unique residue
+        - (Optional) smooth convex-hull outlines for each residue cluster
+
+        Parameters
+        ----------
+        protein_points : (N, 3) array
+            Cartesian coordinates of protein atoms/points.
+
+        protein_res : (N,) array
+            Residue index or residue label for each protein point.
+            Used for grouping and labeling residue clusters within slices.
+
+        imp_points : (M, 3) array
+            Cartesian coordinates of importance/voxel centers.
+
+        imp_values : (M,) array
+            Scalar importance values associated with each `imp_point`.
+            Used for colormap visualization.
+
+        angles : list of float, optional
+            Z-rotation angles (in degrees) at which to generate slices.
+            Each angle produces one row of 3D/2D slices.
+
+        slice_axis : {"x", "y", "z"}, optional
+            Axis along which slices are taken *after* rotation.
+            Defines which coordinate is compared to `slice_center ± slice_thickness/2`.
+
+        slice_thickness : float, optional
+            Thickness of each slice (in coordinate units).  
+            Points satisfy:  
+            `abs(coord[axis] - slice_center) <= slice_thickness / 2`.
+
+            Ignored if `slice_position` is provided, except for determining
+            how *wide* each slice is.
+
+        n_slices : int, optional
+            Number of slices per angle *if* `slice_position` is not provided.
+
+            If `slice_position` **is** provided, `n_slices` is automatically
+            set to `len(slice_position)`.
+
+        slice_position : list of float in [0, 1], optional
+            Normalized slice locations along the selected `slice_axis`.
+
+            If provided:
+            - `n_slices = len(slice_position)`
+            - Slice centers are computed as:
+
+            ``slice_center = amin + pos * (amax - amin)``
+
+            where `amin` and `amax` are the min/max of the protein along
+            the axis *after* rotation.
+
+            This allows slices to be placed at biologically meaningful
+            percentiles (e.g., [0.10, 0.50, 0.90]) instead of uniform spacing.
+
+        cmap : str, optional
+            Colormap used to visualize `imp_values`.
+
+        protein_color : matplotlib color, optional
+            Color used for protein scatter points in 2D slices.
+
+        protein_size : float, optional
+            Marker size for protein scatter points.
+
+        imp_size : float, optional
+            Marker size for importance/voxel scatter points.
+
+        label_residues : bool, optional
+            If True:
+            - Each residue is labeled once per slice (never per point).
+            - Label is positioned outside the residue’s convex hull.
+            - A smooth outline of the convex hull is drawn using spline smoothing.
+
+        show_slice_planes : bool, optional
+            If True, draws semi-transparent slice planes inside each 3D plot.
+
+        Returns
+        -------
+        fig3d : matplotlib.figure.Figure
+            Figure containing the 3D views, one per rotation angle.
+
+        axes3d : list of Axes3D
+            List of 3D Axes corresponding to each angle.
+
+        fig2d : matplotlib.figure.Figure
+            Figure containing the 2D slices in a grid layout
+            (`len(angles)` rows × `n_slices` columns).
+
+        axes2d : 2D list of Axes
+            `axes2d[i][j]` is the j-th slice for the i-th rotation angle.
+
+        Notes
+        -----
+        - All coordinates are first centered by subtracting the mean of
+        `protein_points`. This keeps the protein visually stable across rotations.
+        - Slice positions apply *after* rotation, ensuring intuitive behavior
+        even for non-axis-aligned structures.
+        - Residue labeling uses:
+            - Clustered coordinates per residue
+            - Mean positions of convex hull for label placement
+            - Spline-smoothed convex hulls for clean outlines
+        - Suitable for visualizing voxelized features, attention maps,
+        CNN importance fields, and cavity slices.
+
+        Examples
+        --------
+        >>> fig3d, axes3d, fig2d, axes2d = plt_voxel_slices(
+        ...     protein_points, protein_res,
+        ...     imp_points, imp_values,
+        ...     angles=[0, 45, 90],
+        ...     slice_axis="z",
+        ...     slice_thickness=4,
+        ...     n_slices=3
+        ... )
+
+        >>> # Using customized slice positions
+        >>> fig3d, axes3d, fig2d, axes2d = plt_voxel_slices(
+        ...     protein_points, protein_res,
+        ...     imp_points, imp_values,
+        ...     slice_axis="y",
+        ...     slice_position=[0.1, 0.5, 0.9]
+        ... )
+    """
+
+    # -----------------------------
+    # Center coordinates
+    # -----------------------------
+    center = protein_points.mean(axis=0)
+    prot = protein_points - center
+    imp  = imp_points - center
+
+    # Bounds for full subplot extents
+    xmin, xmax = prot[:,0].min(), prot[:,0].max()
+    ymin, ymax = prot[:,1].min(), prot[:,1].max()
+    zmin, zmax = prot[:,2].min(), prot[:,2].max()
+
+    axis_map = {"x":0, "y":1, "z":2}
+    axis_i = axis_map[slice_axis]
+
+    vmax = np.max(np.abs(imp_values))
+
+    if imp_min: vmin = imp_min
+    if imp_max: vmax = imp_max
+    elif (imp_max is None) & (imp_min is None): 
+        vmin = -vmax
+
+    # -----------------------------
+    # Create two separate figures
+    # -----------------------------
+    fig3d, axes3d = plt.subplots(len(angles), 1,
+                                 subplot_kw={"projection": "3d"},
+                                 figsize=(4, 3*len(angles)))
+
+    if len(angles) == 1:
+        axes3d = [axes3d]
+
+
+    if slice_position: # Prioritize slice position instead
+        n_slices = len(slice_position)
+    fig2d, axes2d = plt.subplots(len(angles), n_slices,
+                                 figsize=(3*n_slices, 3*len(angles)))
+
+    if len(angles) == 1:
+        axes2d = [axes2d]
+
+    # -----------------------------
+    # Loop over angles
+    # -----------------------------
+    for ai, angle in enumerate(angles):
+        rot = R.from_euler("z", angle, degrees=True)
+        prot_rot = rot.apply(prot)
+        imp_rot  = rot.apply(imp)
+        
+        # -----------------------------
+        # Compute slice centers
+        # -----------------------------
+        amin = prot_rot[:, axis_i].min()
+        amax = prot_rot[:, axis_i].max()
+
+        if slice_position is not None:
+            # User-defined normalized slice locations (0→1)
+            slice_position = np.asarray(slice_position, dtype=float)
+            slice_position = np.clip(slice_position, 0.0, 1.0)
+            n_slices = len(slice_position)
+
+        else:
+            # Auto-generate normalized slice positions
+            # EVENLY spaced across [0, 1]
+            slice_position = np.linspace(0.0, 1.0, n_slices)
+
+        # Physical slice centers (coordinate units)
+        slice_centers = amin + slice_position * (amax - amin)
+
+
+        # -----------------------------
+        # Plot 3D view (first column)
+        # -----------------------------
+        ax3d = axes3d[ai]
+
+        # Protein stays fixed
+        ax3d.scatter(prot[:,0], prot[:,1], prot[:,2],
+                    c="gray", s=3, alpha=0.05)
+
+        # Importance values (rotated!)
+        ax3d.scatter(
+            imp[:,0], imp[:,1], imp[:,2],
+            c=imp_values,
+            cmap=cmap,
+            s=5,
+            vmin=vmin,
+            vmax=vmax,
+            alpha=0.9
+        )
+
+        # Set limits based ONLY on protein (keeps view stable)
+        ax3d.set_xlim(xmin, xmax)
+        ax3d.set_ylim(ymin, ymax)
+        ax3d.set_zlim(zmin, zmax)
+
+        # Show slice planes
+        if show_slice_planes:
+            plane_rot = R.from_euler("z", angle, degrees=True)
+            plane_res = 2   # corners only, for transparency and speed
+
+            for c in slice_centers:
+                if slice_axis == "x":
+                    Y, Z = np.meshgrid(np.linspace(ymin,ymax,plane_res),
+                                    np.linspace(zmin,zmax,plane_res))
+                    X = np.ones_like(Y)*c
+                elif slice_axis == "y":
+                    X, Z = np.meshgrid(np.linspace(xmin,xmax,plane_res),
+                                    np.linspace(zmin,zmax,plane_res))
+                    Y = np.ones_like(X)*c
+                else:
+                    X, Y = np.meshgrid(np.linspace(xmin,xmax,plane_res),
+                                    np.linspace(ymin,ymax,plane_res))
+                    Z = np.ones_like(X)*c
+
+                pts = np.column_stack([X.ravel(),Y.ravel(),Z.ravel()])
+                pts_rot = plane_rot.apply(pts)
+                Xr, Yr, Zr = [x.reshape(plane_res,plane_res) for x in pts_rot.T]
+
+                ax3d.plot_surface(Xr, Yr, Zr, color="gray", alpha=0.05)
+
+        # Clean 3D plot
+        ax3d.set_xticks([]); ax3d.set_yticks([]); ax3d.set_zticks([])
+        ax3d.set_xlabel(""); ax3d.set_ylabel(""); ax3d.set_zlabel("")
+        ax3d.axis("off")
+        ax3d.set_title(f"Slice Angle {angle}°", fontsize=10)
+
+        # -----------------------------
+        # 2D Slice Views (Fig 2)
+        # -----------------------------
+        for si, c in enumerate(slice_centers):
+            ax = axes2d[ai][si] if n_slices > 1 else axes2d[ai]
+
+            low = c - slice_thickness/2
+            high = c + slice_thickness/2
+
+            prot_mask = (prot_rot[:,axis_i] >= low) & (prot_rot[:,axis_i] < high)
+            imp_mask  = (imp_rot[:,axis_i]  >= low) & (imp_rot[:,axis_i]  < high)
+
+            prot_slice = prot_rot[prot_mask]
+            imp_slice  = imp_rot[imp_mask]
+            imp_vals   = imp_values[imp_mask]
+
+            # Coordinate projection
+            if slice_axis == "x":
+                Xp, Yp = prot_slice[:,1], prot_slice[:,2]
+                Xi, Yi = imp_slice[:,1], imp_slice[:,2]
+            elif slice_axis == "y":
+                Xp, Yp = prot_slice[:,0], prot_slice[:,2]
+                Xi, Yi = imp_slice[:,0], imp_slice[:,2]
+            else: # z
+                Xp, Yp = prot_slice[:,0], prot_slice[:,1]
+                Xi, Yi = imp_slice[:,0], imp_slice[:,1]
+
+            # Protein scatter
+            if len(prot_slice) > 0:
+                ax.scatter(Xp, Yp, c=protein_color, s=protein_size, alpha=protein_alpha)
+
+                # Residue labeling + convex hull outlines
+                if label_residues:
+                    res_labels = protein_res[prot_mask]
+                    for lab in np.unique(res_labels):
+                        if lab == 'None': # Skip for if the label didn't match to anything 
+                            continue
+                        mask = res_labels == lab
+                        x_lab = Xp[mask]; y_lab = Yp[mask]
+
+                        if len(x_lab) > 5:
+                            pts = np.column_stack([x_lab,y_lab])
+                            hull = ConvexHull(pts)
+                            hull_pts = pts[hull.vertices]
+
+                            hull_pts = np.vstack([hull_pts, hull_pts[0]])
+                            tck, u = splprep([hull_pts[:,0], hull_pts[:,1]], 
+                                             s=1.0, per=True)
+                            uu = np.linspace(0,1,200)
+                            xs, ys = splev(uu, tck)
+                            ax.plot(xs, ys, 
+                                    c="black", 
+                                    lw=2, 
+                                    alpha=0.1)
+
+                            # label offset outward
+                            xm, ym = hull_pts[:,0].mean(), hull_pts[:,1].mean()
+                            ax.text(xm, ym, str(lab),
+                                    fontsize=10, ha="center", va="center")
+
+            # Importance scatter
+            if len(imp_slice) > 0:
+                ax.scatter(Xi, Yi, c=imp_vals, cmap=cmap, s=imp_size,
+                           vmin=vmin, vmax=vmax)
+
+            # Dynamic bounds AFTER rotation
+            xmin_r, xmax_r = prot_rot[:,0].min(), prot_rot[:,0].max()
+            ymin_r, ymax_r = prot_rot[:,1].min(), prot_rot[:,1].max()
+            zmin_r, zmax_r = prot_rot[:,2].min(), prot_rot[:,2].max()
+
+            pad = 2  # padding so labels + hulls fit
+            if slice_axis == "x": ax.set_xlim(ymin_r - pad, ymax_r + pad); ax.set_ylim(zmin_r - pad, zmax_r + pad)
+            elif slice_axis == "y": ax.set_xlim(xmin_r - pad, xmax_r + pad); ax.set_ylim(zmin_r - pad, zmax_r + pad)
+            else: ax.set_xlim(xmin_r - pad, xmax_r + pad) ; ax.set_ylim(ymin_r - pad, ymax_r + pad)
+            
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_frame_on(False)
+            ax.set_aspect("equal")
+            ax.set_title(f"Slice Angle: {angle}°, Position: {slice_position[si]}", fontsize=9)
+    
+    fig3d.tight_layout()
+    fig2d.tight_layout()
+
+    return fig3d, axes3d, fig2d, axes2d
+
+
 
 def plot_correlation(df, x_by, y_by, 
                      label_by=None, 
@@ -894,6 +1269,7 @@ def add_p_value_annotation(fig,
                            font_size=14, 
                            show=None, 
                            select_datatype=None,
+                           horizontal=False,
                            _format=dict(interline=0.07, text_height=1.07, color='black')):
     ''' Adds notations giving the p-value between two box plot data (t-test two-sided comparison)
     
@@ -906,6 +1282,8 @@ def add_p_value_annotation(fig,
         e.g.: [[0,1], [1,2]] compares column 0 with 1 and 1 with 2
     subplot: None or int
         specifies if the figures has subplots and what subplot to add the notation to
+    horizontal: bool
+        if True, annotate across y-axis (for horizontal plots); if False, annotate across x-axis (default)
     _format: dict
         format characteristics for the lines
 
@@ -943,11 +1321,11 @@ def add_p_value_annotation(fig,
     filtered_indices = [i for i, _ in selected_data]
     filtered_y_data = [d['y'] for _, d in selected_data]
 
-    # Prepare annotation y-positions
-    y_range = np.zeros([len(array_columns), 2])
+    # Prepare annotation positions
+    range_vals = np.zeros([len(array_columns), 2])
     for i in range(len(array_columns)):
         base = 1.01 + (i * _format['interline'] if y_padding else _format['interline'])
-        y_range[i] = [base, base + 0.01]
+        range_vals[i] = [base, base + 0.01]
 
     # Main loop for annotation
     for idx, column_pair in enumerate(array_columns):
@@ -967,32 +1345,63 @@ def add_p_value_annotation(fig,
         # Symbol formatting
         symbol = just_annotate[idx] if just_annotate else format_pvalue(pvalue, p_round, tstat if include_tstat else None, show)
 
-        # Draw lines only if different
-        if idx0 != idx1:
-            for x in [idx0, idx1]:
-                fig.add_shape(type="line",
-                    xref="x"+subplot_str, yref="y"+subplot_str+" domain",
-                    x0=x, y0=y_range[idx][0]*_format['text_height'],
-                    x1=x, y1=y_range[idx][1]*_format['text_height'],
-                    line=dict(color=_format['color'], width=2)
-                )
+
+        if horizontal:
+            # Horizontal: annotate across y-axis
+            if idx0 != idx1:
+                for y in [idx0, idx1]:
+                    fig.add_shape(type="line",
+                        xref="x"+subplot_str+" domain", yref="y"+subplot_str,
+                        x0=range_vals[idx][0]*_format['text_height'],
+                        y0=y, 
+                        x1=range_vals[idx][1]*_format['text_height'],
+                        y1=y,
+                        line=dict(color=_format['color'], width=2)
+                    )
             fig.add_shape(type="line",
-                xref="x"+subplot_str, yref="y"+subplot_str+" domain",
-                x0=idx0, y0=y_range[idx][1]*_format['text_height'],
-                x1=idx1, y1=y_range[idx][1]*_format['text_height'],
+                xref="x"+subplot_str+" domain", yref="y"+subplot_str,
+                x0=range_vals[idx][1]*_format['text_height'],
+                y0=idx0,
+                x1=range_vals[idx][1]*_format['text_height'],
+                y1=idx1,
                 line=dict(color=_format['color'], width=2)
             )
-
-        fig.add_annotation(dict(
-            font=dict(color=_format['color'], size=font_size),
-            x=(idx0 + idx1)/2,
-            y=y_range[idx][1]*(_format['text_height']+.07),
-            showarrow=False,
-            text=symbol,
-            textangle=0,
-            xref="x"+subplot_str,
-            yref="y"+subplot_str+" domain"
-        ))
+            fig.add_annotation(dict(
+                font=dict(color=_format['color'], size=font_size),
+                x=range_vals[idx][1]*(_format['text_height']+.07),
+                y=(idx0 + idx1)/2,
+                showarrow=False,
+                text=symbol,
+                textangle=0,
+                xref="x"+subplot_str+" domain",
+                yref="y"+subplot_str
+            ))
+        else:
+            # Vertical: annotate across x-axis (original behavior)
+            if idx0 != idx1:
+                for x in [idx0, idx1]:
+                    fig.add_shape(type="line",
+                        xref="x"+subplot_str, yref="y"+subplot_str+" domain",
+                        x0=x, y0=range_vals[idx][0]*_format['text_height'],
+                        x1=x, y1=range_vals[idx][1]*_format['text_height'],
+                        line=dict(color=_format['color'], width=2)
+                    )
+            fig.add_shape(type="line",
+                xref="x"+subplot_str, yref="y"+subplot_str+" domain",
+                x0=idx0, y0=range_vals[idx][1]*_format['text_height'],
+                x1=idx1, y1=range_vals[idx][1]*_format['text_height'],
+                line=dict(color=_format['color'], width=2)
+            )
+            fig.add_annotation(dict(
+                font=dict(color=_format['color'], size=font_size),
+                x=(idx0 + idx1)/2,
+                y=range_vals[idx][1]*(_format['text_height']+.07),
+                showarrow=False,
+                text=symbol,
+                textangle=0,
+                xref="x"+subplot_str,
+                yref="y"+subplot_str+" domain"
+            ))
     return fig
 
 def format_pvalue(pvalue, p_round=3, t=None, show=None):
