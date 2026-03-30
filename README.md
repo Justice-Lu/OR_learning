@@ -8,158 +8,106 @@
 
 ## Overview
 
-`OR_learning` contains the notebooks, scripts, and helper functions used to study how **olfactory receptor (OR) sequence and structure relate to odor recognition**. The core idea is to combine:
+`OR_learning` is the analysis workspace used to build a **structure-guided olfactory receptor learning pipeline**. It is **not a plug-and-play package**, but it is reasonably reproducible for readers who want to follow the procedure used in the study.
 
-- **ESM2** protein language model embeddings from OR amino acid sequences
-- **AlphaFold3**-based OR structural models
-- **pyKVFinder**-style binding cavity identification
-- **Spatial voxel encoding** of cavity residues and features
-- **CNN-based classifiers** for odor and receptor-level prediction
+At a high level, the workflow is:
 
-This repository is organized both as a **research workspace** and a **replication guide** for the spatial-LLM / “SmellLM” pipeline.
+- generate **AlphaFold3** receptor structures
+- align structures into a common frame
+- identify and extract the **binding cavity**
+- compute reduced **ESM2** residue features
+- encode those features into a shared **3D voxel space**
+- train CNN-based models for odor- and receptor-level prediction
 
----
-
-## Abstract in brief
-
-A major challenge in olfaction is that we still lack a clear map connecting **olfactory receptors** to the **odorants** they detect. This project addresses that gap by integrating sequence-derived representations from **ESM2** with **AlphaFold3** structural models of ORs. Predicted binding cavities are identified, aligned, converted into voxelized spatial features, and then used to train deep learning models that classify odor-related response patterns. In the associated study, this framework achieved strong predictive performance across multiple odor categories and helped reveal cavity features likely to contribute to receptor selectivity.
+In short, the repo supports a structural approach to mapping receptor sequence and cavity features onto odor response.
 
 ---
 
-## Pipeline at a glance
+## High-level workflow and where to look
 
-1. **Encode OR sequences with ESM2**  
-   Generate residue- or sequence-level embeddings from primary amino acid sequence.
+### 1) Generate AF3 structures
+This step is upstream of most analyses in `OR_learning`.
 
-2. **Predict OR structures with AlphaFold3**  
-   Build receptor–miniG-protein structural models and collect the resulting PDB files.
+- `../AF3_files/run_AF3_input.sh`
+- `../alphafold3/run_alphafold.py`
 
-3. **Identify and align binding cavities**  
-   Use cavity detection and structural alignment to define a shared **canonical binding cavity** across receptors.
+These are used to prepare and run the AlphaFold3 jobs whose outputs are then analyzed here.
 
-4. **Build spatial feature tensors**  
-   Map ESM-reduced residue features into a **3D voxel grid** centered on the cavity.
+### 2) Align structures
+Once AF3 models are available, the structures are aligned into a shared frame.
 
-5. **Train downstream models**  
-   Run CNN-based models for odor classification, chemical class prediction, OR classification, or binary tasks.
-
-6. **Interpret latent structure**  
-   Visualize learned embeddings, feature maps, and publication figures from saved outputs.
-
----
-
-## Repository layout
-
-| Path | Purpose | Typical use |
-|---|---|---|
-| `notebooks/binding_cavity/` | Stepwise exploratory and reproducible notebooks for cavity definition, AF3 processing, spatial encoding, and model setup | Start here to understand or rerun the pipeline |
-| `scripts/` | Scripted versions of preprocessing and model training workflows | Use for batch runs or reproducible training |
-| `utils/` | Shared helper functions for PDB parsing, voxelization, plotting, alignment, and analysis | Imported by both notebooks and scripts |
-| `img/` | Static figures and graphical abstracts | README / documentation assets |
-| `files/` | Local input data, metadata, embeddings, cavity pickles, screening tables | Required for replication; mostly not tracked in git |
-| `output/` | Model outputs, figures, intermediate results, and evaluation artifacts | Inspect trained results and generated plots |
-| `temp/` | Scratch space for temporary processing | Optional / disposable |
-
-### Important data locations
-
-For users trying to rerun the pipeline, the most relevant subfolders are:
-
-- `files/ESM/` – saved sequence and residue embeddings, plus reduced ESM representations
-- `files/binding_cavity/` – canonical cavity coordinates, residue-coordinate dictionaries, and reference centers
-- `files/pS6IP/` – odor response / screening tables used for supervised learning
-- `files/OR_seq/` – receptor sequence-related resources
-- `output/spatialESM_OdorClass/` – odor classification runs and evaluation outputs
-- `output/Features/` – downstream feature analyses and visualization outputs
-
----
-
-## Recommended order for replication
-
-If you want to **follow the project from raw inputs to trained models**, this is the most useful navigation path:
-
-### 1) Sequence features
-- `notebooks/binding_cavity/esm_embeddings.ipynb`
-- `scripts/esm_embeddings.py`
-
-Use these to generate or inspect **ESM2 embeddings** for mouse and human OR sequences.
-
-### 2) Binding cavity definition and alignment
-- `notebooks/binding_cavity/bc_0_binding_cavity.ipynb`
-- `notebooks/binding_cavity/bc_01_Canonical_binding_cavity.ipynb`
-- `notebooks/binding_cavity/bc_AF3_CBC.ipynb`
-- `scripts/bc_cav_dump_AF3.py`
+**Useful files:**
 - `scripts/tmalign_pdb_dump_AF3.py`
+- `notebooks/binding_cavity/bc_1_Structural_Sequence_Alignment.ipynb`
 
-These files define the **canonical binding cavity**, align structures, and extract cavity / residue coordinates.
+### 3) Identify and extract binding cavities
+The next step is to detect cavities, compare them across receptors, and define a **canonical binding cavity**.
 
-### 3) Spatial encoding and voxel generation
+**Useful files:**
+- `scripts/bc_cav_dump_AF3.py`
+- `notebooks/binding_cavity/bc_0_binding_cavity.ipynb`
+- `notebooks/binding_cavity/bc_AF3_CBC.ipynb`
+- `notebooks/binding_cavity/bc_01_Canonical_binding_cavity.ipynb`
+
+### 4) Compute ESM features
+Sequence-based features are generated from OR amino acid sequences using ESM2 and then reduced for downstream use.
+
+**Useful files:**
+- `scripts/esm_embeddings.py`
+- `notebooks/binding_cavity/esm_embeddings.ipynb`
+
+### 5) Build spatial encodings
+Cavity geometry and residue-level ESM features are combined into a shared voxel representation.
+
+**Useful files:**
+- `scripts/bc_Cbc_coords_AF3.py`
+- `scripts/bc_Cbc_voxel_esm_dump.py`
 - `notebooks/binding_cavity/bc_spatial_encoding_AF3.ipynb`
 - `notebooks/binding_cavity/bc_spatial_feature_AF3.ipynb`
-- `scripts/bc_Cbc_voxel_esm_dump.py`
 
-These steps combine **cavity geometry + reduced ESM residue embeddings** into the spatial voxel representation used for learning.
+### 6) Train prediction models
+The encoded cavity tensors are then used in CNN models for odor and related classification tasks.
 
-### 4) Model training
+**Useful files:**
 - `scripts/cnn_spatialESM_Odorclassification_model_AF3.py`
 - `scripts/cnn_spatialESM_Chemcalssification_model_AF3.py`
 - `scripts/cnn_spatialESM_ORclassification_model_AF3.py`
 - `scripts/cnn_spatialESM_binary_model_AF3.py`
 
-These are the main training scripts for odor-related prediction tasks.
+### 7) Review figures and outputs
+Final plots, summary analyses, and publication-oriented visualizations are saved in the notebooks and output folders.
 
-### 5) Figures and interpretation
+**Useful files:**
 - `notebooks/figures_code/Figures.ipynb`
-- `output/pub_Figures/`
 - `output/spatialESM_OdorClass/`
 - `output/Features/`
-
-Use these to review saved results, ROC curves, latent maps, and figure-generation code.
-
----
-
-## Practical notes before running
-
-### Data availability
-Large inputs and intermediates are stored under `files/` and `output/`, and many of them are intentionally **git-ignored**. Full replication therefore requires access to the local datasets used in development, including:
-
-- pS6 screening / response tables
-- OR metadata and mappings
-- ESM embedding files
-- cavity coordinate pickles
-- AF3-derived structure outputs
-
-### Path assumptions
-Several notebooks and scripts currently use **absolute local paths** such as:
-
-```python
-/mnt/data2/Justice/OR_learning/...
-```
-
-If you run this repository on another machine, update those paths or define a shared project root before execution.
-
-### Archived material
-Older exploratory work is kept in:
-
-- `notebooks/old/`
-- `scripts/old/`
-
-These are useful for history and troubleshooting, but the **AF3-based notebooks and scripts** are the best place to start for current replication.
+- `output/pub_Figures/`
 
 ---
 
-## Key idea of the project
+## Repository navigation
 
-Instead of treating ORs only as linear sequences, this repository builds a **structure-aware representation of the receptor binding cavity**. By placing reduced language-model features into a shared 3D cavity frame, the models can learn spatial patterns associated with odor responsiveness. In that sense, the project aims to move toward a **structural map of smell**.
+| Path | What it contains |
+|---|---|
+| `notebooks/binding_cavity/` | Main step-by-step notebooks for the AF3 / cavity / spatial encoding workflow |
+| `scripts/` | Scripted versions of preprocessing and training steps |
+| `utils/` | Shared helper functions used throughout the notebooks and scripts |
+| `files/` | Local inputs such as ESM embeddings, cavity coordinates, and response tables |
+| `output/` | Model outputs, figures, and intermediate results |
+| `img/` | Static images including the graphical abstract |
 
 ---
 
-## Suggested starting point for new users
+## Notes
 
-If you are opening this repository for the first time, the quickest path is:
+- Many required inputs live in `files/` and are **not fully tracked in git**.
+- Several scripts use local absolute paths such as `/mnt/data2/Justice/OR_learning/...`.
+- Older exploratory material is kept in `notebooks/old/` and `scripts/old/`.
 
-1. Read this README
-2. Open `notebooks/binding_cavity/bc_01_Canonical_binding_cavity.ipynb`
-3. Then review `notebooks/binding_cavity/bc_spatial_encoding_AF3.ipynb`
-4. Finally run or inspect `scripts/cnn_spatialESM_Odorclassification_model_AF3.py`
+If you want the quickest orientation, start with:
 
-That sequence gives the clearest view of **how structures are prepared, encoded, and used for prediction**.
+1. `notebooks/binding_cavity/bc_01_Canonical_binding_cavity.ipynb`
+2. `notebooks/binding_cavity/bc_spatial_encoding_AF3.ipynb`
+3. `scripts/cnn_spatialESM_Odorclassification_model_AF3.py`
+
+That order gives the clearest chronological view of how the pipeline is built.
