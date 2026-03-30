@@ -760,19 +760,19 @@ def main():
 
     # ---------------- Hyperparameter Sweep ----------------
     param_choices = {
-            'lr': [1e-4, 1e-5],
-            'batch_size': [4,8],
-            'hidden_dim': [8, 16],
-            'kernel_size': [5],
-            'num_conv_layers': [1, 2],
-            'dropout': [0.0, 0.2],
+            'lr': [1e-4, 3e-4, 1e-3, 3e-3],
+            'batch_size': [8, 16, 32],
+            'hidden_dim': [32, 64, 128],
+            'kernel_size': [3, 5],
+            'num_conv_layers': [2, 3, 4],
+            'dropout': [0.0, 0.3, 0.5],
             'pooling': ['AVG'],
             # 'augment_noise': [0.05, 0.5],   # std for Gaussian noise
             # 'augment_mask': [0.05, 0.5],     # prob for masking
             # 'augment_num': [3],
             'augment_noise': [0],   # std for Gaussian noise
             'augment_mask': [0],     # prob for masking
-            'augment_num': [3],
+            'augment_num': [0],
             'multi_valprob_threshold': [0.3, 0.5],
             'multi_label': [True]
             }
@@ -808,45 +808,40 @@ def main():
         with open(os.path.join(run_name, "params.json"), "w") as f:
             json.dump(param_dict, f, indent=4)
 
-        # ---------------- Train/Val Split ----------------
-        # Binary stratification label: Activated OR (1) vs Non-activated (0)
-        # Build labels aligned to or_ids (use cleaned OR name before underscore)
-        activated_set = set(activated_ps6_df.DL_OR.str.lower().values)
-        labels = []
-        for or_name in or_ids:
-            clean_or = or_name.split('_')[0].lower()
-            labels.append(1 if clean_or in activated_set else 0)
-        labels = np.array(labels)
-
-        if labels.shape[0] != len(or_ids):
-            raise ValueError(f"Label length {labels.shape[0]} does not match number of ORs {len(or_ids)}")
-
-        # train_ORs, val_ORs = train_test_split(
-        #     or_ids,
-        #     test_size=0.2,
-        #     stratify=labels,   # stratify by binary activation flag
-        #     random_state=0
-        # )
+        # ---------------- Train/Val/Test Split (by unique OR name, not individual predictions) ----------------
+        # Extract unique OR names (base name without prediction index)
+        unique_or_names = list(set([or_id.split('_')[0].lower() for or_id in or_ids]))
         
-        # Train split
-        train_ORs, remain_ORs = train_test_split(
-            or_ids,
+        # Binary stratification label: Activated OR (1) vs Non-activated (0)
+        activated_set = set(activated_ps6_df.DL_OR.str.lower().values)
+        unique_labels = []
+        for or_name in unique_or_names:
+            unique_labels.append(1 if or_name in activated_set else 0)
+        unique_labels = np.array(unique_labels)
+
+        # Split unique OR names with stratification
+        train_unique_ors, remain_unique_ors = train_test_split(
+            unique_or_names,
             test_size=0.3,  # 30% for val + test
-            stratify=labels,   # Important: keeps odors balanced
+            stratify=unique_labels,   # Important: keeps activation status balanced
             random_state=0
         )
 
-        # Remaining Val, test split 
-        # For stratification on the remain_ORs split, extract corresponding labels
-        labels_remain = [labels[or_ids.index(or_id)] for or_id in remain_ORs]
-        val_ORs, test_ORs = train_test_split(
-            remain_ORs,
+        # Split remaining into val and test
+        labels_remain = [unique_labels[unique_or_names.index(or_name)] for or_name in remain_unique_ors]
+        val_unique_ors, test_unique_ors = train_test_split(
+            remain_unique_ors,
             test_size=0.5,
             stratify=labels_remain,
             random_state=0
         )
 
-        # Build index maps for train and val ORs
+        # Now expand back to all voxels: assign all predictions of an OR to the same fold
+        train_ORs = [or_id for or_id in or_ids if or_id.split('_')[0].lower() in train_unique_ors]
+        val_ORs = [or_id for or_id in or_ids if or_id.split('_')[0].lower() in val_unique_ors]
+        test_ORs = [or_id for or_id in or_ids if or_id.split('_')[0].lower() in test_unique_ors]
+
+        # Build index maps for train, val, and test ORs
         train_index_map = {or_id: or_index_map[or_id] for or_id in train_ORs}
         val_index_map = {or_id: or_index_map[or_id] for or_id in val_ORs}
         test_index_map = {or_id: or_index_map[or_id] for or_id in test_ORs}

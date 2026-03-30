@@ -1020,7 +1020,7 @@ def plt_correlation_subplots(values_pairs,
                     titles='', 
                     plot_pearson_line=True, 
                     linestyle='dotted',
-                    linecolor='black',
+                    linecolor='Red',
                     linewidth=3, 
                     linealpha=0.5,
                     edgecolor='gray',
@@ -1098,8 +1098,12 @@ def plt_correlation_subplots(values_pairs,
             if kwargs.get('colorbar', colorbar):
                 fig.colorbar(hb, ax=ax)
         elif style == 'hist2d':
-            counts, xedges, yedges, img = ax.hist2d(values1, values2, bins=kwargs.get('bins', bins),
-                                                    cmap=kwargs.get('cmap', cmap), norm=norm)
+            counts, xedges, yedges, img = ax.hist2d(values1, values2, 
+                                                    # vmax=kwargs.get('hist2d_vmax', max(max(values1), max(values2))),
+                                                    bins=kwargs.get('bins', bins),
+                                                    cmap=kwargs.get('cmap', cmap),
+                                                    norm=norm
+                                                    )
             if kwargs.get('colorbar', colorbar):
                 fig.colorbar(img, ax=ax)
         else:
@@ -1404,7 +1408,7 @@ def add_p_value_annotation(fig,
             ))
     return fig
 
-def format_pvalue(pvalue, p_round=3, t=None, show=None):
+def format_pvalue(pvalue, p_round=3, t=None, show=None, ns_to_p=False):
     """
     Format a p-value as a string with significance symbols.
 
@@ -1421,20 +1425,21 @@ def format_pvalue(pvalue, p_round=3, t=None, show=None):
     str: The formatted p-value string.
     """
     
+    # Format p-value using scientific notation
+    pval_part = f'p={pvalue:.1e}' if pvalue < 1e-2 else f'p={pvalue:.2f}'
+    
     # Choose significance symbol
     if np.isnan(pvalue): 
         symbol_part= ''
-    elif pvalue >= 0.05:
-        symbol_part = 'ns'
-    elif pvalue >= 0.01:
+    elif pvalue > 0.05:
+        symbol_part = pval_part if ns_to_p else 'ns'
+    elif pvalue > 0.01:
         symbol_part = '*'
-    elif pvalue >= 0.001:
+    elif pvalue > 0.001:
         symbol_part = '**'
     else:
         symbol_part = '***'
     
-    # Format p-value using scientific notation
-    pval_part = f'p={pvalue:.{p_round}e}'
     
     # Handle return based on return_part
     if show == 'symbol':
