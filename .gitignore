@@ -18,3 +18,11 @@ output/voxel_preprocessing
 output/pp_binding_cavity
 output/cnn*
 output/AF3*
+
+scripts/bc_cav_dump.py
+scripts/bc_Cbc_coords.py
+scripts/bc_jaccard.py
+scripts/cnn_spatialAA_binary_model.py
+scripts/cnn_spatialAA_binary.py
+scripts/cnn_spatialESM_Chemcalssification_model_AF3_OLD_WORKS.py
+scripts/cnn_spatialESM_ORclassification_model_AF3.py
