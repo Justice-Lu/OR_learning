@@ -26,7 +26,9 @@ scripts/cnn_spatialAA_model.py
 scripts/cnn_spatialAA_binary_model.py
 scripts/cnn_spatialAA_binary.py
 scripts/cnn_spatialAA_binary_AF3.py
+scripts/cnn_spatialAA_binary_model_AF3.py
 scripts/cnn_spatialAA_ORclassification_model_AF3.py
+scripts/cnn_spatialAA_Odorclassification_model_AF3.py
 scripts/cnn_spatialESM_Chemcalssification_model_AF3_OLD_WORKS.py
 scripts/cnn_spatialESM_ORclassification_model_AF3.py
 scripts/cnn_spatialESM_Odorclassification_model_AF3.py
